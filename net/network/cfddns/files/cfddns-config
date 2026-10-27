@@ -1,0 +1,132 @@
+#!/bin/sh
+# Derive the cfddns env file from UCI. /etc/config/cfddns is the only
+# authoritative configuration; the env file is what cfddns (daemon, -once and
+# -inspect) reads. The file is replaced atomically and only when every value is
+# valid, so a bad UCI edit never clobbers the last working configuration.
+# Nothing is printed on success; errors name options but never their values.
+
+export LC_ALL=C
+umask 077
+
+ENV_FILE=${CFDDNS_ENV_FILE:-/etc/cfddns.env}
+UNSAFE="contains whitespace, quotes, backslash, '#', ';' or non-printable characters"
+
+fail() {
+	echo "cfddns-config: $*" >&2
+	exit 1
+}
+
+# env_safe accepts the core env grammar: printable ASCII without whitespace,
+# quotes, backslash, '#' or ';'.
+env_safe() {
+	case $1 in
+	*[!!-~]* | *\"* | *\'* | *\\* | *\#* | *\;*) return 1 ;;
+	esac
+	return 0
+}
+
+# valid_host mirrors the core RFC 1123 check on a normalized name.
+valid_host() {
+	[ ${#1} -le 253 ] || return 1
+	case $1 in
+	*.*) ;;
+	*) return 1 ;;
+	esac
+	rest=$1
+	while :; do
+		label=${rest%%.*}
+		case $label in
+		'' | -* | *- | *[!a-z0-9-]*) return 1 ;;
+		esac
+		[ ${#label} -le 63 ] || return 1
+		[ "$label" = "$rest" ] && return 0
+		rest=${rest#*.}
+	done
+}
+
+# valid_period accepts the subset of Go durations made of whole h, m and s
+# components in that order ("10s", "5m", "1h30m", "5m0s"), at least 10s. The
+# 6-digit bound per component keeps every accepted value inside Go's range.
+valid_period() {
+	rest=$1
+	units=hms
+	long_enough=
+	[ -n "$rest" ] || return 1
+	while [ -n "$rest" ]; do
+		num=${rest%%[!0-9]*}
+		rest=${rest#"$num"}
+		unit=${rest%"${rest#?}"}
+		rest=${rest#"$unit"}
+		[ -n "$num" ] && [ ${#num} -le 6 ] || return 1
+		case $unit in
+		h | m | s) ;;
+		*) return 1 ;;
+		esac
+		case $units in
+		*"$unit"*) units=${units#*"$unit"} ;;
+		*) return 1 ;;
+		esac
+		significant=${num#"${num%%[1-9]*}"}
+		case $unit in
+		s) [ ${#significant} -ge 2 ] && long_enough=1 ;;
+		*) [ -n "$significant" ] && long_enough=1 ;;
+		esac
+	done
+	[ -n "$long_enough" ]
+}
+
+normalize_host() {
+	# ASCII only, like host names; valid_host rejects every other byte.
+	# shellcheck disable=SC2018,SC2019
+	printf '%s' "$1" | tr 'A-Z' 'a-z'
+}
+
+uci -q get cfddns.main >/dev/null || fail "UCI section cfddns.main not found"
+domain_v4=$(uci -q get cfddns.main.domain_v4)
+domain_v6=$(uci -q get cfddns.main.domain_v6)
+v6_iface=$(uci -q get cfddns.main.v6_iface)
+token=$(uci -q get cfddns.main.token)
+period=$(uci -q get cfddns.main.period)
+
+env_safe "$domain_v4" || fail "domain_v4 $UNSAFE"
+env_safe "$domain_v6" || fail "domain_v6 $UNSAFE"
+env_safe "$v6_iface" || fail "v6_iface $UNSAFE"
+env_safe "$token" || fail "token $UNSAFE"
+env_safe "$period" || fail "period $UNSAFE"
+
+[ -n "$token" ] || fail "token is required"
+
+domain_v4=$(normalize_host "${domain_v4%.}")
+domain_v6=$(normalize_host "${domain_v6%.}")
+[ -n "$domain_v4" ] || [ -n "$domain_v6" ] || fail "set domain_v4, domain_v6 or both"
+[ -z "$domain_v4" ] || valid_host "$domain_v4" || fail "domain_v4 is not a valid host name"
+[ -z "$domain_v6" ] || valid_host "$domain_v6" || fail "domain_v6 is not a valid host name"
+
+if [ -n "$v6_iface" ]; then
+	[ -n "$domain_v6" ] || fail "v6_iface requires domain_v6"
+	case $v6_iface in
+	*/*) fail "v6_iface is not a valid interface name" ;;
+	esac
+fi
+
+[ -n "$period" ] || period=5m
+valid_period "$period" || fail "period must be whole h/m/s units such as 10s, 5m or 1h30m, at least 10s"
+
+tmp=$(mktemp "$ENV_FILE.XXXXXX") || fail "cannot create a temporary file for $ENV_FILE"
+trap 'rm -f "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+{
+	[ -z "$domain_v4" ] || printf 'CFDDNS_V4=%s\n' "$domain_v4"
+	[ -z "$domain_v6" ] || printf 'CFDDNS_V6=%s\n' "$domain_v6"
+	[ -z "$v6_iface" ] || printf 'CFDDNS_V6_IFACE=%s\n' "$v6_iface"
+	# A here-document, unlike a command argument, never exposes the Token
+	# in a process command line.
+	cat <<EOF
+CFDDNS_TOKEN=$token
+CFDDNS_PERIOD=$period
+EOF
+} >"$tmp" || fail "cannot write $ENV_FILE"
+
+mv -f "$tmp" "$ENV_FILE" || fail "cannot replace $ENV_FILE"
+exit 0

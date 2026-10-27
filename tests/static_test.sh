@@ -61,6 +61,11 @@ line_number() {
 	grep -n -- "$1" | head -n 1 | cut -d: -f1
 }
 
+# exact_line_number TEXT: first stdin line equal to TEXT, ignoring indentation.
+exact_line_number() {
+	sed 's/^[[:space:]]*//' | grep -nxF -- "$1" | head -n 1 | cut -d: -f1
+}
+
 uci_default() {
 	awk -v name="$1" '$1 == "option" && $2 == name { print $3 }' "$UCI_DEFAULTS"
 }
@@ -216,6 +221,37 @@ test_token_stays_out_of_argv_and_logs() {
 	done || exit 1
 }
 
+# rpcd "file exec" lets a caller pass environment variables to a root process,
+# so as root the generator must ignore CFDDNS_ENV_FILE and the caller's PATH,
+# and must not let that PATH choose the id binary that decides it is root.
+test_generator_ignores_overrides_as_root() {
+	require "$GEN"
+	code=$TMP_ROOT/cfddns-config.code
+	grep -v '^[[:space:]]*#' "$GEN" >"$code"
+	pin=$(exact_line_number 'PATH=/usr/sbin:/usr/bin:/sbin:/bin' <"$code")
+	default=$(exact_line_number 'ENV_FILE=/etc/cfddns.env' <"$code")
+	check=$(exact_line_number 'case $(id -u) in' <"$code")
+	root=$(exact_line_number "'' | 0 | *[!0-9]*) ;;" <"$code")
+	[ -n "$pin" ] && [ -n "$default" ] && [ -n "$check" ] ||
+		fail "cfddns-config must pin PATH and ENV_FILE, then branch on: case \$(id -u) in"
+	[ "$pin" -lt "$check" ] && [ "$default" -lt "$check" ] ||
+		fail "PATH and ENV_FILE must be pinned before id runs"
+	[ "$root" = $((check + 1)) ] ||
+		fail "uid 0 and unknown uids must keep the pinned values: want \"'' | 0 | *[!0-9]*) ;;\" first"
+	end=$(sed -n "$check,\$p" "$code" | exact_line_number 'esac')
+	[ -n "$end" ] || fail "uid case is not closed"
+	end=$((check + end - 1))
+	# Overrides may only be honoured inside the non-root branch.
+	grep -n -e CFDDNS_ENV_FILE -e 'PATH=' "$code" | cut -d: -f1 | while read -r n; do
+		[ "$n" = "$pin" ] && continue
+		[ "$n" -gt "$root" ] && [ "$n" -lt "$end" ] ||
+			fail "line $n honours an override outside the non-root branch: $(sed -n "${n}p" "$code")"
+	done || exit 1
+	first_tool=$(grep -nE '(^|[^A-Za-z0-9_])(uci|mktemp|mv) ' "$code" | head -n 1 | cut -d: -f1)
+	[ -n "$first_tool" ] && [ "$first_tool" -gt "$end" ] ||
+		fail "uci, mktemp and mv must only run after the root check"
+}
+
 TESTS="
 test_uci_defaults
 test_init_is_procd_service
@@ -229,6 +265,7 @@ test_preinst_refuses_manual_install
 test_postrm_cleans_derived_files_only_on_remove
 test_scripts_parse
 test_token_stays_out_of_argv_and_logs
+test_generator_ignores_overrides_as_root
 "
 
 passed=0

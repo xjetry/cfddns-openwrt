@@ -11,6 +11,13 @@ TEST_SH=${CFDDNS_TEST_SH:-sh}
 # Obviously invalid sentinel; it must never appear in generator output.
 TOKEN=SENTINEL-not-a-real-cloudflare-token
 
+# As root, cfddns-config ignores the CFDDNS_ENV_FILE and PATH overrides these
+# tests depend on.
+if [ "$(id -u)" = 0 ]; then
+	echo "config tests must run as a non-root user" >&2
+	exit 1
+fi
+
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/cfddns-config-test.XXXXXX") || exit 1
 trap 'rm -rf "$TMP_ROOT"' EXIT
 

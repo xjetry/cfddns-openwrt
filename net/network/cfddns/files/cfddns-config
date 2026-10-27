@@ -8,7 +8,21 @@
 export LC_ALL=C
 umask 077
 
-ENV_FILE=${CFDDNS_ENV_FILE:-/etc/cfddns.env}
+# rpcd "file exec" passes caller-supplied environment variables to this root
+# process. Start from root-safe values, with PATH pinned before id runs, and
+# honour the CFDDNS_ENV_FILE and PATH overrides (used by the tests) only for a
+# known non-root uid.
+caller_path=$PATH
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ENV_FILE=/etc/cfddns.env
+case $(id -u) in
+'' | 0 | *[!0-9]*) ;;
+*)
+	PATH=$caller_path
+	ENV_FILE=${CFDDNS_ENV_FILE:-/etc/cfddns.env}
+	;;
+esac
+
 UNSAFE="contains whitespace, quotes, backslash, '#', ';' or non-printable characters"
 
 fail() {

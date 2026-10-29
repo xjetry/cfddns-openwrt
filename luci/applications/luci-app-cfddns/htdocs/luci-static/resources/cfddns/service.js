@@ -42,11 +42,13 @@ function exec(command, params) {
 	});
 }
 
-function failure(res) {
-	var detail = String(res.stderr || res.stdout || '').trim();
+function detail(res) {
+	return String(res.stderr || res.stdout || '').trim();
+}
 
-	if (detail != '')
-		return new Error(_('命令 %s 失败（退出码 %d）：%s').format(res.cmdline, res.code, detail));
+function failure(res) {
+	if (detail(res) != '')
+		return new Error(_('命令 %s 失败（退出码 %d）：%s').format(res.cmdline, res.code, detail(res)));
 
 	return new Error(_('命令 %s 失败（退出码 %d）').format(res.cmdline, res.code));
 }
@@ -130,20 +132,39 @@ return baseclass.extend({
 	},
 
 	/* Save & Apply after the form staged its changes: commit cfddns, so the
-	 * generator and init script read it, regenerate the env file, then set
-	 * boot autostart and the run state to match enabled. */
+	 * generator and init script read it, then regenerate the env file and
+	 * set boot autostart and the run state to match enabled. The generator
+	 * checks Token and domains whatever enabled is, so when disabling it
+	 * runs last: an incomplete config must not keep the service running. */
 	apply: function(enabled) {
 		if (typeof(enabled) != 'boolean')
 			return Promise.reject(new TypeError('apply() expects a boolean'));
 
-		return callUciCommit('cfddns').catch(function(err) {
+		var committed = callUciCommit('cfddns').catch(function(err) {
 			throw new Error(_('提交 cfddns 配置失败：%s').format(err.message));
+		});
+
+		if (enabled)
+			return committed.then(function() {
+				return run(GENERATOR);
+			}).then(function() {
+				return run(INIT, [ 'enable' ]);
+			}).then(function() {
+				return run(INIT, [ 'restart' ]);
+			});
+
+		return committed.then(function() {
+			return run(INIT, [ 'disable' ]);
 		}).then(function() {
-			return run(GENERATOR);
+			return run(INIT, [ 'stop' ]);
 		}).then(function() {
-			return run(INIT, [ enabled ? 'enable' : 'disable' ]);
-		}).then(function() {
-			return run(INIT, [ enabled ? 'restart' : 'stop' ]);
+			return exec(GENERATOR).then(function(res) {
+				if (res.code !== 0)
+					throw new Error(_('服务已停止并已取消开机自启，但配置无效：%s')
+						.format(detail(res) || _('退出码 %d').format(res.code)));
+			}, function(err) {
+				throw new Error(_('服务已停止并已取消开机自启，但未能生成配置：%s').format(err.message));
+			});
 		});
 	}
 });

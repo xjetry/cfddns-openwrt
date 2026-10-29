@@ -68,9 +68,29 @@ test('test_apply_enabled_sequence', async () => {
 });
 
 test('test_apply_disabled_sequence', async () => {
+	// Turning the service off must not depend on a valid config, so disable
+	// and stop run before the env is regenerated.
 	const { service, log } = setup();
 	await service.apply(false);
-	assert.deepEqual(log, [COMMIT, { exec: GEN }, { exec: `${INIT} disable` }, { exec: `${INIT} stop` }]);
+	assert.deepEqual(log, [COMMIT, { exec: `${INIT} disable` }, { exec: `${INIT} stop` }, { exec: GEN }]);
+});
+
+test('test_apply_disabled_with_invalid_config_still_stops', async () => {
+	for (const stderr of ['cfddns-config: token is required\n', 'cfddns-config: set domain_v4, domain_v6 or both\n']) {
+		const { service, log } = setup({ exec: { [GEN]: { code: 1, stderr } } });
+		const err = await rejection(service.apply(false));
+		assert.deepEqual(log, [COMMIT, { exec: `${INIT} disable` }, { exec: `${INIT} stop` }, { exec: GEN }]);
+		assert.match(err.message, /^服务已停止并已取消开机自启，但配置无效：/);
+		assert.ok(err.message.endsWith(stderr.trim()), err.message);
+	}
+
+	// An rpcd-level generator error still reports that the service is off.
+	{
+		const { service, log } = setup({ exec: { [GEN]: 6 } });
+		const err = await rejection(service.apply(false));
+		assert.deepEqual(log, [COMMIT, { exec: `${INIT} disable` }, { exec: `${INIT} stop` }, { exec: GEN }]);
+		assert.match(err.message, /^服务已停止并已取消开机自启/);
+	}
 });
 
 test('test_apply_rejects_non_boolean', async () => {
@@ -82,32 +102,38 @@ test('test_apply_rejects_non_boolean', async () => {
 });
 
 test('test_apply_failure_stops_sequence', async () => {
-	// A config-generation failure stops before any service operation, and
-	// the rejection carries the generator's diagnostic.
+	// Enabling: a config-generation failure stops before any service
+	// operation, and the rejection carries the generator's diagnostic.
 	{
 		const stderr = 'cfddns-config: token is required\n';
 		const { service, log } = setup({ exec: { [GEN]: { code: 1, stderr } } });
 		const err = await rejection(service.apply(true));
 		assert.match(err.message, /cfddns-config: token is required/);
+		assert.doesNotMatch(err.message, /已停止/);
 		assert.deepEqual(log, [COMMIT, { exec: GEN }]);
 	}
 
-	// The commit must succeed before the generator reads UCI.
-	{
+	// The commit must succeed before anything reads UCI.
+	for (const enabled of [true, false]) {
 		const { service, log } = setup({ ubus: { 'uci.commit': () => [6] } });
-		await rejection(service.apply(true));
-		assert.deepEqual(log, [COMMIT]);
+		await rejection(service.apply(enabled));
+		assert.deepEqual(log, [COMMIT], `apply(${enabled})`);
 	}
 
-	// Every later step stops the sequence too and reports its stderr.
-	for (const [enabled, steps] of [[true, ['enable', 'restart']], [false, ['disable', 'stop']]]) {
-		for (let i = 0; i < steps.length; i++) {
-			const failing = `${INIT} ${steps[i]}`;
-			const { service, log } = setup({ exec: { [failing]: { code: 1, stderr: `boom ${steps[i]}\n` } } });
+	// Every service step stops the sequence and reports its stderr; when
+	// disabling, the generator never runs after a failed disable or stop.
+	const sequences = [
+		[true, [GEN, `${INIT} enable`, `${INIT} restart`], [`${INIT} enable`, `${INIT} restart`]],
+		[false, [`${INIT} disable`, `${INIT} stop`, GEN], [`${INIT} disable`, `${INIT} stop`]],
+	];
+	for (const [enabled, order, failing] of sequences) {
+		for (const cmd of failing) {
+			const { service, log } = setup({ exec: { [cmd]: { code: 1, stderr: `boom ${cmd}\n` } } });
 			const err = await rejection(service.apply(enabled));
-			assert.match(err.message, new RegExp(`boom ${steps[i]}`));
-			const want = [COMMIT, { exec: GEN }].concat(steps.slice(0, i + 1).map((s) => ({ exec: `${INIT} ${s}` })));
-			assert.deepEqual(log, want, `apply(${enabled}) failing at ${steps[i]}`);
+			assert.match(err.message, new RegExp(`boom ${cmd}`));
+			assert.doesNotMatch(err.message, /已停止/);
+			const want = [COMMIT].concat(order.slice(0, order.indexOf(cmd) + 1).map((c) => ({ exec: c })));
+			assert.deepEqual(log, want, `apply(${enabled}) failing at ${cmd}`);
 		}
 	}
 
@@ -116,6 +142,11 @@ test('test_apply_failure_stops_sequence', async () => {
 		const { service, log } = setup({ exec: { [`${INIT} enable`]: 6 } });
 		await rejection(service.apply(true));
 		assert.deepEqual(log, [COMMIT, { exec: GEN }, { exec: `${INIT} enable` }]);
+	}
+	{
+		const { service, log } = setup({ exec: { [`${INIT} disable`]: 6 } });
+		await rejection(service.apply(false));
+		assert.deepEqual(log, [COMMIT, { exec: `${INIT} disable` }]);
 	}
 });
 

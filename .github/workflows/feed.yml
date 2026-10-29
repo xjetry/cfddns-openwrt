@@ -1,0 +1,112 @@
+# Tests every push and pull request. Pushes to main also build the feed with
+# the OpenWrt SDK, sign it with the CFDDNS_FEED_SIGNING_KEY secret and deploy
+# it to GitHub Pages; without the secret the run fails instead of publishing
+# an unsigned feed.
+name: feed
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CORE_VERSION: 0.3.0
+  SDK_BASE: https://downloads.openwrt.org/releases/23.05.4/targets/mediatek/filogic
+  SDK_FILE: openwrt-sdk-23.05.4-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+  SDK_SHA256: 14cc73986e31d4daeef2a7a66b754c4c0e3b6c02718be2c23025532b336eb855
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+      - name: Tests
+        run: make check
+      # Ubuntu's shellcheck 0.9 reports SC2015 for the intended
+      # "[ ... ] && [ ... ] || fail" checks; shellcheck 0.11 does not.
+      - name: Shellcheck
+        run: >-
+          shellcheck -s sh -e SC2015 net/network/cfddns/files/cfddns-config
+          net/network/cfddns/files/cfddns.init scripts/*.sh tests/*.sh
+      - name: Verify the pinned core binary against the release
+        run: |
+          mk=net/network/cfddns/Makefile
+          test "$(sed -n 's/^PKG_VERSION:=//p' "$mk")" = "$CORE_VERSION"
+          pinned=$(sed -n 's/^PKG_HASH:=//p' "$mk")
+          base=https://github.com/xjetry/cfddns/releases/download/v$CORE_VERSION
+          mkdir "$RUNNER_TEMP/core"
+          curl -fsSL -o "$RUNNER_TEMP/core/SHA256SUMS" "$base/SHA256SUMS"
+          curl -fsSL -o "$RUNNER_TEMP/core/cfddns-linux-arm64" "$base/cfddns-linux-arm64"
+          published=$(awk '$2 == "cfddns-linux-arm64" { print $1 }' "$RUNNER_TEMP/core/SHA256SUMS")
+          downloaded=$(sha256sum "$RUNNER_TEMP/core/cfddns-linux-arm64" | cut -d ' ' -f 1)
+          echo "PKG_HASH $pinned, SHA256SUMS $published, asset $downloaded"
+          test "$pinned" = "$published"
+          test "$pinned" = "$downloaded"
+
+  feed:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Write the signing key
+        env:
+          CFDDNS_FEED_SIGNING_KEY: ${{ secrets.CFDDNS_FEED_SIGNING_KEY }}
+        run: |
+          if [ -z "$CFDDNS_FEED_SIGNING_KEY" ]; then
+            echo "::error::secret CFDDNS_FEED_SIGNING_KEY is not set; refusing to publish an unsigned feed"
+            exit 1
+          fi
+          umask 077
+          mkdir "$RUNNER_TEMP/feed-key"
+          printf '%s\n' "$CFDDNS_FEED_SIGNING_KEY" >"$RUNNER_TEMP/feed-key/cfddns.sec"
+      - uses: actions/checkout@v7
+      - name: Install SDK prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential bzip2 file gawk gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools rsync unzip wget xz-utils zlib1g-dev zstd
+      - name: Download and verify the OpenWrt SDK
+        run: |
+          mkdir "$RUNNER_TEMP/sdk-dl" "$RUNNER_TEMP/sdk"
+          curl -fsSL -o "$RUNNER_TEMP/sdk-dl/sha256sums" "$SDK_BASE/sha256sums"
+          curl -fsSL -o "$RUNNER_TEMP/sdk-dl/$SDK_FILE" "$SDK_BASE/$SDK_FILE"
+          grep -qx "$SDK_SHA256 \*$SDK_FILE" "$RUNNER_TEMP/sdk-dl/sha256sums"
+          echo "$SDK_SHA256  $RUNNER_TEMP/sdk-dl/$SDK_FILE" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/sdk-dl/$SDK_FILE" -C "$RUNNER_TEMP/sdk" --strip-components=1
+      - name: Build, index and sign the feed
+        run: >-
+          make feed SDK_DIR="$RUNNER_TEMP/sdk" CORE_VERSION="$CORE_VERSION"
+          OUTPUT_DIR="$RUNNER_TEMP/dist" FEED_KEY="$RUNNER_TEMP/feed-key/cfddns.sec"
+      - name: Remove the signing key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/feed-key"
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/dist
+
+  deploy:
+    needs: feed
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -16,9 +16,18 @@
 | 设备 | 固件 | 状态 |
 |------|------|------|
 | GL-E5800 / Mudi 7 | GL 原厂固件，OpenWrt 23.05.4（`sdx75/generic`） | 待真机验收 |
-| GL-BE10000 / Slate 7 Pro | GL 原厂固件 4.8.6，OpenWrt 21.02（`mediatek/mt7987`） | 待真机验收 |
+| GL-BE10000 / Slate 7 Pro | GL 原厂固件 4.8.6，OpenWrt 21.02（`mediatek/mt7987`） | 部分通过（2026-10-29，仅 IPv4），见下 |
 
 两台的 opkg 都接受 `aarch64_cortex-a53`。包用官方 OpenWrt 23.05.4 `mediatek/filogic` SDK 打包，不是 GL 的厂商 SDK。真机验收完成前不算已支持；其他设备即使架构匹配也未验证，不要靠强改 opkg 架构安装。
+
+GL-BE10000 上已通过的项（[验收记录](docs/acceptance/2026-10-27-gl-be10000.md)）：
+
+- 按本 README 导入公钥、添加软件源、`opkg update`、`usign -V` 校验输出 `OK`，再安装 `cfddns` 和 `luci-app-cfddns`；该固件的 `opkg.conf` 没有 `check_signature`
+- UCI / env 权限 `0600`，进程参数和日志里没有 Token；`-once`、`-inspect`（记录存在 / 不存在 / 同名多条 / Token 无效 / 未配置），以及服务启动、停止、重启和 `enabled` 开关
+- Cloudflare A 记录的创建、内容不同时更新、无变化周期不写入（测试线路上 `1.1.1.1` 不通，IPv4 探测经临时中转）；重启后自启，运行状态重建
+- LuCI 页面用到的 rpcd 调用（经 uhttpd `/ubus`、只授予本应用和 `luci-base` 的会话）：保存并应用（启用 / 停用）、启动 / 停止 / 重启、状态读取和 inspect，以及 ACL 对无关文件、无关命令和其他配置的拒绝
+
+未验证：IPv6 / AAAA（设备没有原生 IPv6）、浏览器里的页面显示、版本升级。验收中发现的问题（例如 IPv4 探测依赖 `1.1.1.1`，在该设备的上行网络上不通；在 LuCI 清空 Token 后 `/etc/cfddns.env` 仍保留旧 Token）见验收记录。
 
 ---
 

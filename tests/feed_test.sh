@@ -82,19 +82,25 @@ EOF
 #!/bin/sh
 # Fake usign for -S (sign) and -V (verify). Line 2 of a key file starts with
 # the key id; a signature holds the key id and the message's cksum, never the
-# secret key. FAKE_USIGN_SIGN_FAILS makes -S fail.
-mode= msg= key= sig=
+# secret key. Like usign, "-m -" reads the message from stdin and -V prints
+# OK unless -q. FAKE_USIGN_SIGN_FAILS makes -S fail.
+mode= msg= key= sig= quiet=
 while [ $# -gt 0 ]; do
 	case $1 in
 	-S | -V) mode=$1 ;;
 	-m) msg=$2 && shift ;;
 	-s | -p) key=$2 && shift ;;
 	-x) sig=$2 && shift ;;
-	-q) ;;
+	-q) quiet=1 ;;
 	*) echo "usign: unexpected argument $1" >&2 && exit 2 ;;
 	esac
 	shift
 done
+if [ "$msg" = - ]; then
+	msg=$(mktemp "${TMPDIR:-/tmp}/fake-usign.XXXXXX") || exit 1
+	trap 'rm -f "$msg"' EXIT
+	cat >"$msg"
+fi
 if [ -z "$mode" ] || [ ! -f "$msg" ] || [ ! -f "$key" ]; then
 	echo "usign: missing message or key" >&2
 	exit 1
@@ -105,8 +111,11 @@ id=$(awk 'NR == 2 { print $1 }' "$key")
 sum=$(cksum <"$msg" | awk '{ print $1 "-" $2 }')
 if [ "$mode" = -S ]; then
 	printf 'untrusted comment: signed by fake key %s\n%s %s\n' "$id" "$id" "$sum" >"$sig"
+elif [ "$(sed -n 2p "$sig" 2>/dev/null)" = "$id $sum" ]; then
+	[ -n "$quiet" ] || echo OK >&2
 else
-	[ "$(sed -n 2p "$sig" 2>/dev/null)" = "$id $sum" ]
+	echo "verification failed" >&2
+	exit 1
 fi
 EOF
 	chmod +x "$BIN/opkg-make-index" "$BIN/usign"
@@ -189,6 +198,24 @@ readme_commands() {
 # $WORK/commands.
 command_line() {
 	grep -E -- "^[0-9]+:$1" "$WORK/commands" | head -n 1 | cut -d: -f1
+}
+
+# readme_feed_name prints the name of the README's src/gz feed, which is also
+# its list file in /var/opkg-lists.
+readme_feed_name() {
+	sed -n "s|.*'src/gz \([^ ]*\) https://xjetry.github.io/cfddns-openwrt/$ARCH'.*|\1|p" "$README"
+}
+
+# readme_verify_command LIST_DIR SIG PUBKEY prints the README's usign -V
+# command with /var/opkg-lists/, the downloaded Packages.sig and the pinned
+# key replaced by LIST_DIR/, SIG and PUBKEY.
+readme_verify_command() {
+	readme_commands >"$WORK/commands"
+	fetched=$(sed -n "s|^[0-9]*:wget -O \([^ ]*\) https://.*/Packages\.sig$|\1|p" "$WORK/commands" | head -n 1)
+	line=$(grep -E '^[0-9]+:.*usign -V ' "$WORK/commands" | head -n 1 | cut -d: -f2-)
+	[ -n "$fetched" ] && [ -n "$line" ] || return 1
+	printf '%s\n' "$line" | sed -e "s|$fetched|$2|g" \
+		-e "s|/etc/opkg/keys/$(key_fingerprint "$ROOT/cfddns.pub")|$3|g" -e "s|/var/opkg-lists/|$1/|g"
 }
 
 # run_preinst ROOT ARGS... runs the preinst with IPKG_INSTROOT=ROOT.
@@ -608,24 +635,32 @@ test_readme_verifies_index_before_install() {
 	[ -n "$fp" ] || fail "cannot read the fingerprint of cfddns.pub"
 	names=$(grep -oE '[0-9a-f]{16,}' "$README" | sort -u)
 	[ "$names" = "$fp" ] || fail "README names key fingerprints '$names', want only $fp from cfddns.pub"
-	feed=$(sed -n "s|.*'src/gz \([^ ]*\) https://xjetry.github.io/cfddns-openwrt/$ARCH'.*|\1|p" "$README")
+	feed=$(readme_feed_name)
 	[ -n "$feed" ] || fail "README must add the $ARCH feed with a src/gz line"
 
 	readme_commands >"$WORK/commands"
 	update=$(command_line 'opkg update$')
 	fetch=$(command_line "wget -O [^ ]+ https://xjetry\\.github\\.io/cfddns-openwrt/$ARCH/Packages\\.sig$")
-	verify=$(command_line 'usign -V ')
+	verify=$(command_line '.*usign -V ')
 	install=$(command_line 'opkg install ')
 	[ -n "$update" ] && [ -n "$fetch" ] && [ -n "$verify" ] && [ -n "$install" ] ||
 		fail "README must show opkg update, wget of Packages.sig, usign -V and opkg install commands"
 	[ "$update" -lt "$fetch" ] && [ "$fetch" -lt "$verify" ] && [ "$verify" -lt "$install" ] ||
 		fail "README order is opkg update:$update Packages.sig:$fetch usign -V:$verify opkg install:$install; want them in that order"
 
+	# opkg saves a src/gz list as the downloaded Packages.gz, but the signature
+	# covers Packages: like opkg-key verify, decompress the list into usign.
 	sig=$(sed -n "${fetch}p" "$README" | awk '{ print $3 }')
+	list=/var/opkg-lists/$feed
+	line=$(sed -n "${verify}p" "$README")
+	case $line in
+	"(zcat $list 2>/dev/null || cat $list) | usign -V "*) ;;
+	*) fail "usign -V must read the decompressed list: (zcat $list 2>/dev/null || cat $list) | usign -V -m - ...; got: $line" ;;
+	esac
 	m='' x='' p=''
 	set -f
-	# shellcheck disable=SC2046 # split the command into its words
-	set -- $(sed -n "${verify}p" "$README")
+	# shellcheck disable=SC2086 # split the usign arguments into words
+	set -- ${line#*"| usign -V "}
 	set +f
 	while [ $# -gt 0 ]; do
 		case $1 in
@@ -633,15 +668,70 @@ test_readme_verifies_index_before_install() {
 		-x) x=$2 ;;
 		-p) p=$2 ;;
 		-P) fail "usign -V -P accepts every key in a directory; pin this feed's key with -p" ;;
+		-q) fail "usign -V -q does not print the OK the README asks for" ;;
 		esac
 		shift
 	done
-	[ "$m" = "/var/opkg-lists/$feed" ] || fail "usign -V must check the index opkg uses, /var/opkg-lists/$feed, not '$m'"
+	[ "$m" = - ] || fail "usign -V must read the decompressed list from stdin (-m -), not '$m'"
 	[ "$x" = "$sig" ] || fail "usign -V must use the downloaded signature $sig, not '$x'"
 	[ "$p" = "/etc/opkg/keys/$fp" ] || fail "usign -V must pin -p /etc/opkg/keys/$fp, not '$p'"
 	# shellcheck disable=SC2016 # literal Markdown code span
 	sed -n "${verify},${install}p" "$README" | grep -qF '不要执行 `opkg install`' ||
 		fail "README must tell users to stop before opkg install when usign -V fails"
+}
+
+# Runs the README's usign -V command against real files. opkg saves a src/gz
+# list as the downloaded Packages.gz while the signature covers Packages, so
+# usign -V -m on the list itself fails. Uses the fake usign, or a real usign
+# named by CFDDNS_TEST_USIGN with a key pair generated here.
+test_readme_verify_command_checks_the_gzip_list() {
+	if [ -n "${CFDDNS_TEST_USIGN:-}" ]; then
+		# Not a symlink: the SDK's usign finds its loader relative to itself.
+		printf '#!/bin/sh\nexec "%s" "$@"\n' "$CFDDNS_TEST_USIGN" >"$SIGNER"
+		rm -f "$SECRET" "$PUBLIC"
+		(umask 077 && "$SIGNER" -G -s "$SECRET" -p "$PUBLIC" -c 'throwaway test key') >/dev/null 2>&1 ||
+			fail "usign -G failed"
+	fi
+	# macOS zcat only reads .Z files; busybox and GNU zcat are gzip -dc.
+	printf '#!/bin/sh\nexec gzip -dc "$@"\n' >"$BIN/zcat"
+	chmod +x "$BIN/zcat"
+	lists=$WORK/lists
+	list=$lists/$(readme_feed_name)
+	mkdir "$lists"
+	cmd=$(readme_verify_command "$lists" "$WORK/Packages.sig" "$PUBLIC") ||
+		fail "README lacks the Packages.sig download or the usign -V command"
+	printf 'Package: cfddns\nVersion: 0.3.0-1\n\nPackage: luci-app-cfddns\nVersion: 0.1.0\n' >"$WORK/Packages"
+	"$SIGNER" -S -m "$WORK/Packages" -s "$SECRET" -x "$WORK/Packages.sig" >/dev/null 2>&1 ||
+		fail "cannot sign the test index"
+
+	for kind in gzip plain direct tampered; do
+		run=$cmd
+		case $kind in
+		gzip) gzip -9nc "$WORK/Packages" >"$list" ;;
+		plain) cp "$WORK/Packages" "$list" ;;
+		direct)
+			# The README's round-1 form, on the list as opkg saves it.
+			gzip -9nc "$WORK/Packages" >"$list"
+			run="usign -V -m $list -x $WORK/Packages.sig -p $PUBLIC"
+			;;
+		tampered) sed 's/0\.3\.0-1/0.3.0-2/' "$WORK/Packages" | gzip -9nc >"$list" ;;
+		esac
+		PATH=$BIN:$PATH sh -c "$run" >"$WORK/out" 2>&1
+		RC=$?
+		if grep -qx OK "$WORK/out"; then ok=1; else ok=0; fi
+		case $kind in
+		gzip | plain)
+			if [ "$RC" != 0 ] || [ "$ok" = 0 ]; then
+				fail "$kind list: README command exit $RC, want OK: $(cat "$WORK/out")"
+			fi
+			;;
+		*)
+			if [ "$RC" = 0 ] || [ "$ok" = 1 ]; then
+				fail "$kind list: verification passed, want a failure: $(cat "$WORK/out")"
+			fi
+			;;
+		esac
+	done
 }
 
 TESTS="
@@ -654,6 +744,7 @@ test_build_feed_checks_inputs
 test_build_feed_with_fake_sdk
 test_preinst_detects_manual_install
 test_readme_verifies_index_before_install
+test_readme_verify_command_checks_the_gzip_list
 "
 
 passed=0

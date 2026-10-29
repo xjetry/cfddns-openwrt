@@ -46,10 +46,10 @@ opkg update
 ```sh
 grep '^option check_signature' /etc/opkg.conf   # 没有输出：opkg 不校验签名
 wget -O /tmp/cfddns-Packages.sig https://xjetry.github.io/cfddns-openwrt/aarch64_cortex-a53/Packages.sig
-usign -V -m /var/opkg-lists/cfddns -x /tmp/cfddns-Packages.sig -p /etc/opkg/keys/af1661a3e9bf4ee0
+(zcat /var/opkg-lists/cfddns 2>/dev/null || cat /var/opkg-lists/cfddns) | usign -V -m - -x /tmp/cfddns-Packages.sig -p /etc/opkg/keys/af1661a3e9bf4ee0
 ```
 
-`-m` 是 `opkg update` 刚下载、安装时 opkg 要用的索引（`/var/opkg-lists` 是 `lists_dir` 的默认值），`-p` 只认本软件源的公钥。必须输出 `OK`；否则停下，不要执行 `opkg install`：重新 `opkg update`、再下载签名校验一次（可能刚好赶上发布），仍失败就不要安装。索引里有每个 ipk 的 SHA256，opkg 下载时会核对。
+`/var/opkg-lists/cfddns` 是 `opkg update` 刚下载、安装时 opkg 要用的索引（`/var/opkg-lists` 是 `lists_dir` 的默认值），按下载的 `Packages.gz` 原样保存；签名针对解压后的 `Packages`，所以先解压再交给 `usign`，和 opkg 自己校验（`opkg-key verify`）时一样。`-p` 只认本软件源的公钥。必须输出 `OK`；否则停下，不要执行 `opkg install`：重新 `opkg update`、再下载签名校验一次（可能刚好赶上发布），仍失败就不要安装。索引里有每个 ipk 的 SHA256，opkg 下载时会核对。
 
 输出 `OK` 后安装：
 

@@ -1,0 +1,14 @@
+{
+	"admin/services/cfddns": {
+		"title": "Cloudflare DDNS",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "cfddns"
+		},
+		"depends": {
+			"acl": [ "luci-app-cfddns" ],
+			"uci": { "cfddns": true }
+		}
+	}
+}

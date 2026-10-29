@@ -24,7 +24,7 @@
 
 ## 安装
 
-> 在路由器上以 root 执行。
+> 在路由器上以 root 执行，按顺序来。
 
 导入公钥，先核对指纹：
 
@@ -41,23 +41,22 @@ echo 'src/gz cfddns https://xjetry.github.io/cfddns-openwrt/aarch64_cortex-a53' 
 opkg update
 ```
 
-安装：
+校验索引签名。`/etc/opkg.conf` 里有 `option check_signature` 时，`opkg update` 已用 `/etc/opkg/keys` 校验过 `Packages.sig`，签名不对会拒绝这个源；GL 原厂固件可能没有这一行，opkg 就不校验签名，这一步**必做**（有这一行时再做一遍也无妨）。不要为此改 `opkg.conf`：
+
+```sh
+grep '^option check_signature' /etc/opkg.conf   # 没有输出：opkg 不校验签名
+wget -O /tmp/cfddns-Packages.sig https://xjetry.github.io/cfddns-openwrt/aarch64_cortex-a53/Packages.sig
+usign -V -m /var/opkg-lists/cfddns -x /tmp/cfddns-Packages.sig -p /etc/opkg/keys/af1661a3e9bf4ee0
+```
+
+`-m` 是 `opkg update` 刚下载、安装时 opkg 要用的索引（`/var/opkg-lists` 是 `lists_dir` 的默认值），`-p` 只认本软件源的公钥。必须输出 `OK`；否则停下，不要执行 `opkg install`：重新 `opkg update`、再下载签名校验一次（可能刚好赶上发布），仍失败就不要安装。索引里有每个 ipk 的 SHA256，opkg 下载时会核对。
+
+输出 `OK` 后安装：
 
 ```sh
 opkg install luci-app-cfddns     # 页面 + 核心，自动带上 cfddns 和 ca-bundle
 opkg install cfddns              # 只要核心：UCI + 服务，没有页面
 ```
-
-### 校验索引签名
-
-`/etc/opkg.conf` 里有 `option check_signature` 时，`opkg update` 自己校验 `Packages.sig`，签名不对就拒绝这个源。GL 原厂固件默认没有这一行，opkg 不校验签名。不要为此改 `opkg.conf`，装之前手动校验 opkg 刚下载的索引：
-
-```sh
-wget -O /tmp/cfddns-Packages.sig https://xjetry.github.io/cfddns-openwrt/aarch64_cortex-a53/Packages.sig
-usign -V -m /var/opkg-lists/cfddns -x /tmp/cfddns-Packages.sig -P /etc/opkg/keys
-```
-
-`/var/opkg-lists` 是 `opkg.conf` 里 `lists_dir` 的默认值。输出 `OK` 才安装。索引里有每个 ipk 的 SHA256，opkg 下载时会核对。校验失败先重新 `opkg update` 再校验一次（可能刚好赶上发布），仍失败就不要安装。
 
 ---
 
@@ -100,10 +99,9 @@ uci commit cfddns
 ```sh
 cp -p /etc/cfddns.env /root/cfddns.env.bak   # 备份，含 Token
 cfddns -uninstall                            # 停服务，删 init 脚本 / env / 二进制
-opkg install luci-app-cfddns                 # 或 opkg install cfddns
 ```
 
-然后按备份里的 `CFDDNS_V4` / `CFDDNS_V6` / `CFDDNS_V6_IFACE` / `CFDDNS_TOKEN` / `CFDDNS_PERIOD` 填 UCI，确认运行正常后删除备份。手动安装的 `-port` / `-passwd` HTTP 触发在包里没有对应选项。
+再按「安装」一节导入公钥、添加软件源、`opkg update`、校验索引签名，输出 `OK` 后 `opkg install`。然后按备份里的 `CFDDNS_V4` / `CFDDNS_V6` / `CFDDNS_V6_IFACE` / `CFDDNS_TOKEN` / `CFDDNS_PERIOD` 填 UCI，确认运行正常后删除备份。手动安装的 `-port` / `-passwd` HTTP 触发在包里没有对应选项。
 
 ---
 

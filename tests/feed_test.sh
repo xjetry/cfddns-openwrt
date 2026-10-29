@@ -12,6 +12,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 INDEX=$ROOT/scripts/index-feed.sh
 BUILD=$ROOT/scripts/build-feed.sh
 PKG_MK=$ROOT/net/network/cfddns/Makefile
+README=$ROOT/README.md
 TEST_SH=${CFDDNS_TEST_SH:-sh}
 ARCH=aarch64_cortex-a53
 CORE_IPK=cfddns_0.3.0-1_$ARCH.ipk
@@ -166,6 +167,28 @@ preinst_from_make() {
 		make -s --no-print-directory -f "$PKG_MK" -f "$stub/print.mk" \
 			TOPDIR="$stub" INCLUDE_DIR="$stub" preinst
 	)
+}
+
+# key_fingerprint PUBKEY prints the key id as usign -F does: the 8 bytes after
+# the "Ed" algorithm tag, in hex without leading zeros.
+key_fingerprint() {
+	sed -n 2p "$1" | base64 -d | od -An -tx1 -j2 -N8 | tr -d ' \n' | sed 's/^0*//'
+}
+
+# readme_commands prints "LINE:TEXT" for every line of the README's fenced
+# code blocks, without indentation.
+readme_commands() {
+	awk '
+		/^```/ { inside = !inside; next }
+		inside { sub(/^[[:space:]]+/, ""); print NR ":" $0 }
+	' "$README"
+}
+
+# command_line ERE prints the README line number of the first code line that
+# matches ERE from its start; readme_commands must have filled
+# $WORK/commands.
+command_line() {
+	grep -E -- "^[0-9]+:$1" "$WORK/commands" | head -n 1 | cut -d: -f1
 }
 
 # run_preinst ROOT ARGS... runs the preinst with IPKG_INSTROOT=ROOT.
@@ -577,6 +600,50 @@ test_preinst_detects_manual_install() {
 	[ "$RC" = 0 ] || fail "files outside IPKG_INSTROOT were reported"
 }
 
+# Stock firmware may not let opkg check signatures, so the README must have
+# users verify the index opkg just downloaded, against this feed's key only,
+# before the first opkg install.
+test_readme_verifies_index_before_install() {
+	fp=$(key_fingerprint "$ROOT/cfddns.pub")
+	[ -n "$fp" ] || fail "cannot read the fingerprint of cfddns.pub"
+	names=$(grep -oE '[0-9a-f]{16,}' "$README" | sort -u)
+	[ "$names" = "$fp" ] || fail "README names key fingerprints '$names', want only $fp from cfddns.pub"
+	feed=$(sed -n "s|.*'src/gz \([^ ]*\) https://xjetry.github.io/cfddns-openwrt/$ARCH'.*|\1|p" "$README")
+	[ -n "$feed" ] || fail "README must add the $ARCH feed with a src/gz line"
+
+	readme_commands >"$WORK/commands"
+	update=$(command_line 'opkg update$')
+	fetch=$(command_line "wget -O [^ ]+ https://xjetry\\.github\\.io/cfddns-openwrt/$ARCH/Packages\\.sig$")
+	verify=$(command_line 'usign -V ')
+	install=$(command_line 'opkg install ')
+	[ -n "$update" ] && [ -n "$fetch" ] && [ -n "$verify" ] && [ -n "$install" ] ||
+		fail "README must show opkg update, wget of Packages.sig, usign -V and opkg install commands"
+	[ "$update" -lt "$fetch" ] && [ "$fetch" -lt "$verify" ] && [ "$verify" -lt "$install" ] ||
+		fail "README order is opkg update:$update Packages.sig:$fetch usign -V:$verify opkg install:$install; want them in that order"
+
+	sig=$(sed -n "${fetch}p" "$README" | awk '{ print $3 }')
+	m='' x='' p=''
+	set -f
+	# shellcheck disable=SC2046 # split the command into its words
+	set -- $(sed -n "${verify}p" "$README")
+	set +f
+	while [ $# -gt 0 ]; do
+		case $1 in
+		-m) m=$2 ;;
+		-x) x=$2 ;;
+		-p) p=$2 ;;
+		-P) fail "usign -V -P accepts every key in a directory; pin this feed's key with -p" ;;
+		esac
+		shift
+	done
+	[ "$m" = "/var/opkg-lists/$feed" ] || fail "usign -V must check the index opkg uses, /var/opkg-lists/$feed, not '$m'"
+	[ "$x" = "$sig" ] || fail "usign -V must use the downloaded signature $sig, not '$x'"
+	[ "$p" = "/etc/opkg/keys/$fp" ] || fail "usign -V must pin -p /etc/opkg/keys/$fp, not '$p'"
+	# shellcheck disable=SC2016 # literal Markdown code span
+	sed -n "${verify},${install}p" "$README" | grep -qF '不要执行 `opkg install`' ||
+		fail "README must tell users to stop before opkg install when usign -V fails"
+}
+
 TESTS="
 test_feed_layout_and_index
 test_feed_signature_contains_no_private_key
@@ -586,6 +653,7 @@ test_feed_index_pads_for_usign_bug
 test_build_feed_checks_inputs
 test_build_feed_with_fake_sdk
 test_preinst_detects_manual_install
+test_readme_verifies_index_before_install
 "
 
 passed=0

@@ -7,6 +7,10 @@
 //
 // fakeRpc and fakeFs reproduce the reply handling of the device's rpc.js and
 // fs.js, so tests see the same resolve/reject behaviour as a real router.
+//
+// E() follows luci.js dom.append(): an array of children becomes text nodes
+// and elements, but a lone string child is assigned as innerHTML, so such
+// elements are marked html: true for tests to reject.
 
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -29,7 +33,10 @@ function E(tag, attrs, children) {
 		children = attrs;
 		attrs = {};
 	}
-	return { isElement: true, tag: tag, attrs: attrs, children: (children == null) ? [] : [].concat(children) };
+	var el = { isElement: true, tag: tag, attrs: attrs, children: (children == null) ? [] : [].concat(children) };
+	if (children != null && typeof(children) != 'object' && typeof(children) != 'function')
+		el.html = true;
+	return el;
 }
 `;
 
@@ -52,9 +59,10 @@ function parseRequires(source) {
 	return required;
 }
 
-// loadModule(file, deps) evaluates a LuCI module; deps maps every required
-// module name to its fake and must match the module's requires exactly.
-function loadModule(file, deps) {
+// loadModule(file, deps, globals) evaluates a LuCI module; deps maps every
+// required module name to its fake and must match the module's requires
+// exactly. globals.document replaces the module's empty document object.
+function loadModule(file, deps, globals = {}) {
 	const source = fs.readFileSync(file, 'utf8');
 	const required = parseRequires(source);
 	const wanted = required.map((r) => r.name).sort().join(', ');
@@ -65,7 +73,7 @@ function loadModule(file, deps) {
 	vm.runInContext(GLOBALS, context);
 	const params = ['window', 'document', 'L'].concat(required.map((r) => r.as));
 	const factory = vm.runInContext(`(function(${params.join(', ')}) { ${source}\n})`, context, { filename: file });
-	const Class = factory.apply(factory, [context, {}, L].concat(required.map((r) => deps[r.name])));
+	const Class = factory.apply(factory, [context, globals.document || {}, L].concat(required.map((r) => deps[r.name])));
 	if (typeof Class !== 'function')
 		throw new TypeError(`${file} does not return a class`);
 	return new Class();
@@ -124,11 +132,23 @@ function fakeRpc(log, handlers) {
 	};
 }
 
-// fakeFs follows reference fs.js exec(): an rpcd error status (a number from
-// the handler) rejects, while any exit code resolves with
-// { code, stdout, stderr }. Calls are logged as { exec: 'command args...' },
-// plus env: true if the caller passed an environment.
-function fakeFs(log, handler) {
+// Error names reference fs.js gives each non-zero rpcd status.
+const RPC_ERRORS = [null, 'InvalidCommandError', 'InvalidArgumentError', 'MethodNotFoundError', 'NotFoundError',
+	'NoDataError', 'PermissionError', 'TimeoutError', 'UnsupportedError'];
+
+function rpcError(status, what) {
+	const err = new Error(`rpcd status ${status} for ${what}`);
+	err.name = RPC_ERRORS[status] || 'Error';
+	return err;
+}
+
+// fakeFs follows reference fs.js exec() and read(): an rpcd error status (a
+// number from the handler) rejects with the matching error name, e.g.
+// NotFoundError for a missing file; otherwise exec resolves with
+// { code, stdout, stderr } whatever the exit code and read with the file's
+// text. Calls are logged as { exec: 'command args...' }, plus env: true if
+// the caller passed an environment, and { read: path }.
+function fakeFs(log, handler, reader) {
 	return {
 		exec(command, params, env) {
 			const cmdline = [command].concat(Array.isArray(params) ? params : []).join(' ');
@@ -136,7 +156,18 @@ function fakeFs(log, handler) {
 			return Promise.resolve().then(() => {
 				const res = handler(cmdline);
 				if (typeof res === 'number')
-					throw new Error(`rpcd status ${res} for ${cmdline}`);
+					throw rpcError(res, cmdline);
+				return res;
+			});
+		},
+		read(path) {
+			log.push({ read: path });
+			return Promise.resolve().then(() => {
+				if (!reader)
+					throw new Error(`unexpected read ${path}`);
+				const res = reader(path);
+				if (typeof res === 'number')
+					throw rpcError(res, path);
 				return res;
 			});
 		},

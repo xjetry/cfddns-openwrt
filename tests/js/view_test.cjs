@@ -1,6 +1,6 @@
 'use strict';
-// Tests for view/cfddns.js, the two-tab settings page, with fake form, uci, ui
-// and service modules. Run with: node --test tests/js/view_test.cjs
+// Tests for view/cfddns.js, the two-tab settings page, with fake form, uci, ui,
+// service and status modules. Run with: node --test tests/js/view_test.cjs
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -47,9 +47,15 @@ function fakeForm(log, saveResult) {
 		this.sections.push(section);
 		return section;
 	};
+	// render() resolves with the map's root node, which LuCI keeps across
+	// the re-render that follows every save.
 	form.Map.prototype.render = function () {
 		log.push('map.render');
-		return Promise.resolve('map rendered');
+		this.node = {
+			listeners: [],
+			addEventListener(type, fn, capture) { this.listeners.push({ type, fn, capture }); },
+		};
+		return Promise.resolve(this.node);
 	};
 	form.Map.prototype.save = function (cb, silent) {
 		log.push({ save: { cb: cb == null ? null : 'callback', silent } });
@@ -92,15 +98,22 @@ function setup({ save = () => Promise.resolve(), apply = () => Promise.resolve()
 			return apply();
 		},
 	};
-	const page = loadModule(VIEW, { view, form, uci, ui, 'cfddns.service': service });
+	const status = {
+		refresh() {
+			log.push('status.refresh');
+			return Promise.resolve();
+		},
+	};
+	const page = loadModule(VIEW, { view, form, uci, ui, 'cfddns.service': service, 'cfddns.status': status });
 	return { page, log };
 }
 
 async function rendered(opts) {
 	const s = setup(opts);
-	assert.equal(await s.page.render(), 'map rendered');
+	const node = await s.page.render();
 	const map = s.page.map;
 	assert.ok(map, 'render() must keep the map as this.map');
+	assert.equal(node, map.node, 'render() must return the rendered map');
 	assert.equal(map.sections.length, 1);
 	return Object.assign(s, { map, section: map.sections[0] });
 }
@@ -129,6 +142,28 @@ test('test_status_tab_has_container', async () => {
 	assert.equal(el.tag, 'div');
 	assert.equal(el.attrs.id, 'cfddns-status');
 	assert.deepEqual(plain(el.children), []);
+});
+
+test('test_status_loads_when_tab_opens', async () => {
+	// ui.tabs dispatches the non-bubbling cbi-tab-active on a pane whenever
+	// it is shown: at first render, after the re-render on save and on every
+	// tab switch. Only showing the status tab loads, once per event.
+	const { map, section, log } = await rendered();
+	section.options.find((o) => o.tab === 'status').renderWidget('main', 0, null);
+	assert.ok(!log.includes('status.refresh'), 'rendering alone must not load');
+	const listeners = map.node.listeners;
+	assert.deepEqual(listeners.map((l) => [l.type, l.capture]), [['cbi-tab-active', true]]);
+	const onTab = listeners[0].fn;
+
+	onTab({ detail: { tab: 'settings' } });
+	assert.equal(log.filter((e) => e === 'status.refresh').length, 0);
+	onTab({ detail: { tab: 'status' } });
+	assert.equal(log.filter((e) => e === 'status.refresh').length, 1);
+	onTab({ detail: { tab: 'settings' } });
+	onTab({ detail: { tab: 'status' } });
+	assert.equal(log.filter((e) => e === 'status.refresh').length, 2);
+	onTab({});
+	assert.equal(log.filter((e) => e === 'status.refresh').length, 2);
 });
 
 test('test_settings_fields', async () => {

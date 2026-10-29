@@ -4,6 +4,7 @@
 'require uci';
 'require ui';
 'require cfddns.service as service';
+'require cfddns.status as status';
 
 /* Mirrors valid_period in /usr/libexec/cfddns-config: whole h, m and s
  * components in that order, at most 6 digits each, at least 10s in total.
@@ -78,7 +79,17 @@ return view.extend({
 		};
 
 		this.map = m;
-		return m.render();
+		/* ui.tabs fires the non-bubbling cbi-tab-active on a pane each time
+		 * it is shown, including after the map re-renders on save; the map
+		 * root survives those re-renders, so one capturing listener loads
+		 * the status once per opening of the status tab. */
+		return m.render().then(function(node) {
+			node.addEventListener('cbi-tab-active', function(ev) {
+				if (ev.detail && ev.detail.tab === 'status')
+					status.refresh();
+			}, true);
+			return node;
+		});
 	},
 
 	/* Stage the form silently, then let the service controller commit only

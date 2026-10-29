@@ -1,12 +1,14 @@
 {
 	"luci-app-cfddns": {
-		"description": "Grant access to Cloudflare DDNS configuration and service control",
+		"description": "Grant access to Cloudflare DDNS configuration, status and service control",
 		"read": {
 			"file": {
-				"/etc/init.d/cfddns enabled": [ "exec" ]
+				"/etc/init.d/cfddns enabled": [ "exec" ],
+				"/var/run/cfddns.status": [ "read" ],
+				"/usr/bin/cfddns -inspect": [ "exec" ]
 			},
 			"ubus": {
-				"file": [ "exec" ],
+				"file": [ "exec", "read" ],
 				"service": [ "list" ]
 			},
 			"uci": [ "cfddns" ]

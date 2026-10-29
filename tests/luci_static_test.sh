@@ -1,8 +1,8 @@
 #!/bin/sh
 # shellcheck disable=SC2016 # expected Makefile and JavaScript text is literal
-# Static checks for luci-app-cfddns: package Makefile, menu and ACL files and
-# the settings view. Behaviour is tested by tests/js. Run with:
-# make test-luci-static
+# Static checks for luci-app-cfddns: package Makefile, menu and ACL files, the
+# settings view and the status module. Behaviour is tested by tests/js. Run
+# with: make test-luci-static
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 APP=$ROOT/luci/applications/luci-app-cfddns
@@ -10,6 +10,7 @@ APP_MK=$APP/Makefile
 RES=$APP/htdocs/luci-static/resources
 VIEW=$RES/view/cfddns.js
 SERVICE=$RES/cfddns/service.js
+STATUS=$RES/cfddns/status.js
 MENU=$APP/root/usr/share/luci/menu.d/luci-app-cfddns.json
 ACL=$APP/root/usr/share/rpcd/acl.d/luci-app-cfddns.json
 
@@ -50,11 +51,11 @@ option_block() {
 }
 
 test_app_files_exist() {
-	require "$APP_MK" "$VIEW" "$SERVICE" "$MENU" "$ACL"
+	require "$APP_MK" "$VIEW" "$SERVICE" "$STATUS" "$MENU" "$ACL"
 }
 
 test_js_syntax() {
-	require "$VIEW" "$SERVICE"
+	require "$VIEW" "$SERVICE" "$STATUS"
 	find "$ROOT/luci" "$ROOT/tests/js" -type f \( -name '*.js' -o -name '*.cjs' \) >"$TMP_ROOT/js"
 	[ -s "$TMP_ROOT/js" ] || fail "no JavaScript files found"
 	while IFS= read -r f; do
@@ -100,8 +101,27 @@ test_acl_has_no_wildcards() {
 
 test_view_requires() {
 	require "$VIEW"
-	for dep in view form uci ui 'cfddns.service as service'; do
+	for dep in view form uci ui 'cfddns.service as service' 'cfddns.status as status'; do
 		grep -qx "'require $dep';" "$VIEW" || fail "view must 'require $dep'"
+	done
+}
+
+test_status_requires() {
+	require "$STATUS"
+	for dep in baseclass dom fs 'cfddns.service as service'; do
+		grep -qx "'require $dep';" "$STATUS" || fail "status must 'require $dep'"
+	done
+}
+
+# Status is loaded on demand only: no timers or polling, and Cloudflare's
+# state comes from cfddns -inspect, never from a public DNS lookup.
+test_status_no_polling_or_dns() {
+	require "$STATUS" "$VIEW"
+	for f in "$STATUS" "$VIEW"; do
+		! grep -nE 'setTimeout|setInterval|requestAnimationFrame|poll' "$f" ||
+			fail "${f#"$ROOT"/} must not poll or use timers"
+		! grep -niE 'nslookup|resolveip|dns-query|dns\.google|cloudflare-dns|1\.1\.1\.1|8\.8\.8\.8' "$f" ||
+			fail "${f#"$ROOT"/} must not query public DNS"
 	done
 }
 
@@ -160,6 +180,8 @@ test_package_metadata
 test_menu_route
 test_acl_has_no_wildcards
 test_view_requires
+test_status_requires
+test_status_no_polling_or_dns
 test_view_tabs
 test_view_settings_fields
 test_view_token_is_password

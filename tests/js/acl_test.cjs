@@ -1,7 +1,8 @@
 'use strict';
 // Tests for the luci-app-cfddns menu entry and rpcd ACL: the page may only
-// read and write UCI cfddns, list the procd service, commit UCI and run the
-// exact commands service.js uses. Run with: node --test tests/js/acl_test.cjs
+// read and write UCI cfddns, list the procd service, commit UCI, run the exact
+// commands service.js uses and read the status file and run the inspection
+// status.js uses. Run with: node --test tests/js/acl_test.cjs
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -18,19 +19,41 @@ function readJSON(file) {
 	return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-test('test_acl_grants_exact_capabilities', () => {
+test('test_acl_exact_capabilities', () => {
 	const acl = readJSON(ACL);
 	assert.deepEqual(Object.keys(acl), ['luci-app-cfddns']);
 	const group = acl['luci-app-cfddns'];
 	assert.equal(typeof group.description, 'string');
+
+	// Spelled out so a failure names the offending grant before the whole
+	// file is compared below.
+	for (const perm of ['read', 'write']) {
+		assert.deepEqual(group[perm].uci, ['cfddns'], `${perm}: UCI other than cfddns`);
+		for (const [path, ops] of Object.entries(group[perm].file)) {
+			assert.ok(/^\/[^*?[\s]*( [^*?[\s]+)*$/.test(path), `${perm}: file pattern ${path}`);
+			assert.ok(ops.length === 1 && ['read', 'exec'].includes(ops[0]), `${perm}: ${path} ${ops}`);
+		}
+		for (const object of Object.keys(group[perm].ubus))
+			assert.ok(['file', 'service', 'uci'].includes(object), `${perm}: ubus object ${object}`);
+		assert.ok(!('cgi-io' in group[perm]), `${perm}: cgi-io`);
+	}
+	assert.deepEqual(group.read.ubus.service, ['list'], 'service: only list');
+	assert.ok(!('service' in group.write.ubus), 'service: no write methods');
+	assert.deepEqual(group.read.file['/var/run/cfddns.status'], ['read']);
+	assert.deepEqual(group.read.file['/usr/bin/cfddns -inspect'], ['exec']);
+	assert.ok(!('/usr/bin/cfddns' in group.read.file) && !('/usr/bin/cfddns' in group.write.file),
+		'cfddns may only run as -inspect');
+
 	assert.deepEqual(group, {
 		description: group.description,
 		read: {
 			file: {
 				[`${INIT} enabled`]: ['exec'],
+				'/var/run/cfddns.status': ['read'],
+				'/usr/bin/cfddns -inspect': ['exec'],
 			},
 			ubus: {
-				file: ['exec'],
+				file: ['exec', 'read'],
 				service: ['list'],
 			},
 			uci: ['cfddns'],

@@ -88,7 +88,7 @@ function setup({ save = () => Promise.resolve(), apply = () => Promise.resolve()
 	};
 	const ui = {
 		addNotification(title, children, ...classes) {
-			log.push({ notify: classes.join(' '), text: text({ children: [].concat(children) }) });
+			log.push({ notify: classes.join(' '), text: text({ children: [].concat(children) }), html: children.html === true });
 		},
 		changes: { init() { log.push('changes.init'); } },
 	};
@@ -239,21 +239,75 @@ test('test_save_apply_sequence', async () => {
 	}
 });
 
+test('test_save_apply_success_notices', async () => {
+	// apply(true) resolves with a command result, apply(false) with the flag.
+	for (const res of [undefined, { unconfigured: false }, { cmdline: '/etc/init.d/cfddns restart', code: 0 }]) {
+		const { page, log } = await rendered({ apply: () => Promise.resolve(res) });
+		log.length = 0;
+		await page.handleSaveApply({}, '0');
+		const notes = log.filter((e) => e.notify);
+		assert.equal(notes.length, 1, JSON.stringify(res));
+		assert.equal(notes[0].notify, 'info');
+		assert.equal(notes[0].text, '设置已保存并应用。');
+	}
+
+	// Cleared credentials are a success that says what happened to the env.
+	{
+		const { page, log } = await rendered({ enabled: '0', apply: () => Promise.resolve({ unconfigured: true }) });
+		log.length = 0;
+		await page.handleSaveApply({}, '0');
+		const notes = log.filter((e) => e.notify);
+		assert.equal(notes.length, 1);
+		assert.equal(notes[0].notify, 'info');
+		for (const word of [/服务已停止/, /取消开机自启/, /Token/, /域名/, /清除/])
+			assert.match(notes[0].text, word);
+		assert.equal(log[log.length - 1], 'changes.init');
+	}
+});
+
+test('test_save_apply_messages_are_text_nodes', async () => {
+	// luci.js assigns a lone string child as innerHTML; a command's stderr
+	// must be shown as text.
+	const hostile = '<img src=x onerror=alert(1)>';
+	for (const apply of [() => Promise.resolve(), () => Promise.resolve({ unconfigured: true }),
+		() => Promise.reject(new Error(hostile))]) {
+		const { page, log } = await rendered({ apply });
+		log.length = 0;
+		await page.handleSaveApply({}, '0');
+		const notes = log.filter((e) => e.notify);
+		assert.equal(notes.length, 1);
+		assert.equal(notes[0].html, false, notes[0].text);
+	}
+});
+
 test('test_save_apply_failure_keeps_input_and_shows_error', async () => {
 	// A service step fails after the form was staged: report it, do not
 	// reset or re-render the form, and resolve so the button recovers.
 	{
 		const { page, log } = await rendered({
-			apply: () => Promise.reject(new Error('命令 /usr/libexec/cfddns-config 失败（退出码 1）：cfddns-config: token is required')),
+			apply: () => Promise.reject(new Error('命令 /usr/libexec/cfddns-config 失败（退出码 1）：cfddns-config: period must be whole h/m/s units')),
 		});
 		log.length = 0;
 		await page.handleSaveApply({}, '0');
 		const notes = log.filter((e) => e.notify);
 		assert.equal(notes.length, 1);
 		assert.equal(notes[0].notify, 'danger');
-		assert.match(notes[0].text, /token is required/);
+		assert.match(notes[0].text, /period must be whole/);
 		assert.ok(!log.includes('map.reset') && !log.includes('map.render'), JSON.stringify(log));
 		assert.equal(log[log.length - 1], 'changes.init');
+	}
+
+	// The not-configured refusal from apply(true) is shown like any failure.
+	{
+		const { page, log } = await rendered({
+			apply: () => Promise.reject(new Error('Token 和至少一个域名为必填，服务已停止')),
+		});
+		log.length = 0;
+		await page.handleSaveApply({}, '0');
+		const notes = log.filter((e) => e.notify);
+		assert.equal(notes.length, 1);
+		assert.equal(notes[0].notify, 'danger');
+		assert.match(notes[0].text, /Token 和至少一个域名为必填，服务已停止/);
 	}
 
 	// Validation or staging fails: nothing is committed or applied.

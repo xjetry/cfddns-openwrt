@@ -73,7 +73,7 @@ test_json_syntax() {
 
 test_package_metadata() {
 	require "$APP_MK"
-	[ "$(make_var PKG_VERSION)" = 0.1.0 ] || fail "PKG_VERSION must be 0.1.0"
+	[ "$(make_var PKG_VERSION)" = 0.1.1 ] || fail "PKG_VERSION must be 0.1.1"
 	[ "$(make_var PKG_RELEASE)" = 1 ] || fail "PKG_RELEASE must be 1"
 	# luci.mk turns LUCI_PKGARCH into PKGARCH and LUCI_EXTRA_DEPENDS into the
 	# versioned control-file dependency; plain DEPENDS cannot carry versions.

@@ -15,16 +15,16 @@ PKG_MK=$ROOT/net/network/cfddns/Makefile
 README=$ROOT/README.md
 TEST_SH=${CFDDNS_TEST_SH:-sh}
 ARCH=aarch64_cortex-a53
-CORE_IPK=cfddns_0.3.0-1_$ARCH.ipk
+CORE_IPK=cfddns_0.3.0-2_$ARCH.ipk
 # luci.mk versions LuCI packages by PKG_VERSION alone.
-LUCI_IPK="luci-app-cfddns_0.1.0_all.ipk"
+LUCI_IPK="luci-app-cfddns_0.1.1_all.ipk"
 MANUAL_PATHS="/usr/bin/cfddns /etc/init.d/cfddns /etc/cfddns.env"
 CORE_CONTROL="Package: cfddns
-Version: 0.3.0-1
+Version: 0.3.0-2
 Depends: libc, ca-bundle
 Architecture: $ARCH"
 LUCI_CONTROL="Package: luci-app-cfddns
-Version: 0.1.0
+Version: 0.1.1
 Depends: cfddns (>=0.3.0), libc, luci-base, cfddns
 Architecture: all"
 REAL_MAKE=$(command -v make)
@@ -439,10 +439,10 @@ test_feed_requires_exactly_both_packages() {
 	assert_refused luci-app-cfddns
 	mv "$WORK/$LUCI_IPK" "$IPKS/"
 
-	mv "$IPKS/$CORE_IPK" "$IPKS/cfddns_0.3.0-1_aarch64_generic.ipk"
+	mv "$IPKS/$CORE_IPK" "$IPKS/cfddns_0.3.0-2_aarch64_generic.ipk"
 	run_index
 	assert_refused "cfddns_\*_$ARCH.ipk"
-	mv "$IPKS/cfddns_0.3.0-1_aarch64_generic.ipk" "$IPKS/$CORE_IPK"
+	mv "$IPKS/cfddns_0.3.0-2_aarch64_generic.ipk" "$IPKS/$CORE_IPK"
 
 	printf 'older core\n' >"$IPKS/cfddns_0.2.0-1_$ARCH.ipk"
 	run_index
@@ -597,7 +597,7 @@ test_preinst_detects_manual_install() {
 				*) ln -s "$r/missing-target" "$r$path" ;;
 				esac
 			done
-			for args in install 'install 0.3.0-1'; do
+			for args in install 'install 0.3.0-2'; do
 				# shellcheck disable=SC2086 # split into opkg's arguments
 				run_preinst "$root" $args
 				[ "$RC" = 1 ] || fail "$kind $path: preinst $args exit $RC, want 1"
@@ -700,7 +700,7 @@ test_readme_verify_command_checks_the_gzip_list() {
 	mkdir "$lists"
 	cmd=$(readme_verify_command "$lists" "$WORK/Packages.sig" "$PUBLIC") ||
 		fail "README lacks the Packages.sig download or the usign -V command"
-	printf 'Package: cfddns\nVersion: 0.3.0-1\n\nPackage: luci-app-cfddns\nVersion: 0.1.0\n' >"$WORK/Packages"
+	printf 'Package: cfddns\nVersion: 0.3.0-2\n\nPackage: luci-app-cfddns\nVersion: 0.1.1\n' >"$WORK/Packages"
 	"$SIGNER" -S -m "$WORK/Packages" -s "$SECRET" -x "$WORK/Packages.sig" >/dev/null 2>&1 ||
 		fail "cannot sign the test index"
 
@@ -714,7 +714,7 @@ test_readme_verify_command_checks_the_gzip_list() {
 			gzip -9nc "$WORK/Packages" >"$list"
 			run="usign -V -m $list -x $WORK/Packages.sig -p $PUBLIC"
 			;;
-		tampered) sed 's/0\.3\.0-1/0.3.0-2/' "$WORK/Packages" | gzip -9nc >"$list" ;;
+		tampered) sed 's/0\.3\.0-2/0.3.0-3/' "$WORK/Packages" | gzip -9nc >"$list" ;;
 		esac
 		PATH=$BIN:$PATH sh -c "$run" >"$WORK/out" 2>&1
 		RC=$?
@@ -734,6 +734,45 @@ test_readme_verify_command_checks_the_gzip_list() {
 	done
 }
 
+# The README's command-line setup must keep the Token out of process arguments
+# and shell history. Its commands run here as written, with a fake uci that
+# records its arguments, its stdin and the Token file's mode.
+test_readme_keeps_token_out_of_argv() {
+	token='SENTINEL-not-a-real-cloudflare-token'
+	file=$WORK/cfddns.token
+	! grep -qE 'uci[^|]*set[^|]*token' "$README" || fail "README must not set the Token as a uci argument"
+	readme_commands >"$WORK/commands"
+	grep -E '^[0-9]+:.*/tmp/cfddns\.token' "$WORK/commands" | cut -d: -f2- |
+		sed "s|/tmp/cfddns\.token|$file|g" >"$WORK/readme-token.sh"
+	[ "$(wc -l <"$WORK/readme-token.sh" | tr -d ' ')" = 3 ] ||
+		fail "README must write, use and delete /tmp/cfddns.token: $(cat "$WORK/readme-token.sh")"
+	cat >"$BIN/uci" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$WORK/uci-args"
+cat >>"$WORK/uci-stdin"
+ls -ln "$file" | cut -c1-10 >"$WORK/uci-mode"
+EOF
+	chmod +x "$BIN/uci"
+	printf '%s\n' "$token" | (umask 022 && PATH=$BIN:$PATH "$TEST_SH" "$WORK/readme-token.sh") >"$WORK/stdout" 2>"$WORK/stderr"
+	RC=$?
+	assert_ok
+	[ ! -s "$WORK/stdout" ] && [ ! -s "$WORK/stderr" ] ||
+		fail "README commands printed: $(cat "$WORK/stdout" "$WORK/stderr")"
+	[ "$(cat "$WORK/uci-args")" = batch ] || fail "uci must only get 'batch': $(cat "$WORK/uci-args")"
+	[ "$(cat "$WORK/uci-stdin")" = "set cfddns.main.token='$token'" ] ||
+		fail "unexpected uci batch input: $(cat "$WORK/uci-stdin")"
+	[ "$(cat "$WORK/uci-mode")" = -rw------- ] || fail "Token file mode is $(cat "$WORK/uci-mode")"
+	[ ! -e "$file" ] || fail "the README must delete the Token file"
+}
+
+# Exit 3 is what makes clearing credentials safe to document, so the README
+# has to say what happens.
+test_readme_documents_cleared_credentials() {
+	# shellcheck disable=SC2016 # literal Markdown code spans
+	grep -F '/etc/cfddns.env' "$README" | grep -F '`token`' | grep -F '`domain_v4`' | grep -qF '删除' ||
+		fail "README must say that an empty token or both empty domains remove /etc/cfddns.env"
+}
+
 TESTS="
 test_feed_layout_and_index
 test_feed_signature_contains_no_private_key
@@ -745,6 +784,8 @@ test_build_feed_with_fake_sdk
 test_preinst_detects_manual_install
 test_readme_verifies_index_before_install
 test_readme_verify_command_checks_the_gzip_list
+test_readme_keeps_token_out_of_argv
+test_readme_documents_cleared_credentials
 "
 
 passed=0

@@ -2,8 +2,8 @@
 
 [cfddns](https://github.com/xjetry/cfddns) 的 OpenWrt 软件源（opkg feed），两个包：
 
-- `cfddns`：核心，UCI（`/etc/config/cfddns`）+ procd 服务；直接打包 cfddns v0.3.0 Release 的 `cfddns-linux-arm64`（静态链接，SHA256 固定），架构 `aarch64_cortex-a53`
-- `luci-app-cfddns`：LuCI 页面（服务 → Cloudflare DDNS），「运行状态」「基本设置」两个标签页，架构 `all`
+- `cfddns`（0.3.0-2）：核心，UCI（`/etc/config/cfddns`）+ procd 服务；直接打包 cfddns v0.3.0 Release 的 `cfddns-linux-arm64`（静态链接，SHA256 固定），架构 `aarch64_cortex-a53`
+- `luci-app-cfddns`（0.1.1）：LuCI 页面（服务 → Cloudflare DDNS），「运行状态」「基本设置」两个标签页，架构 `all`
 
 软件源：`https://xjetry.github.io/cfddns-openwrt/aarch64_cortex-a53`
 
@@ -20,14 +20,14 @@
 
 两台的 opkg 都接受 `aarch64_cortex-a53`。包用官方 OpenWrt 23.05.4 `mediatek/filogic` SDK 打包，不是 GL 的厂商 SDK。真机验收完成前不算已支持；其他设备即使架构匹配也未验证，不要靠强改 opkg 架构安装。
 
-GL-BE10000 上已通过的项（[验收记录](docs/acceptance/2026-10-27-gl-be10000.md)）：
+GL-BE10000 上已通过的项（[验收记录](docs/acceptance/2026-10-27-gl-be10000.md)，验收版本 `cfddns` 0.3.0-1、`luci-app-cfddns` 0.1.0）：
 
 - 按本 README 导入公钥、添加软件源、`opkg update`、`usign -V` 校验输出 `OK`，再安装 `cfddns` 和 `luci-app-cfddns`；该固件的 `opkg.conf` 没有 `check_signature`
 - UCI / env 权限 `0600`，进程参数和日志里没有 Token；`-once`、`-inspect`（记录存在 / 不存在 / 同名多条 / Token 无效 / 未配置），以及服务启动、停止、重启和 `enabled` 开关
 - Cloudflare A 记录的创建、内容不同时更新、无变化周期不写入（测试线路上 `1.1.1.1` 不通，IPv4 探测经临时中转）；重启后自启，运行状态重建
 - LuCI 页面用到的 rpcd 调用（经 uhttpd `/ubus`、只授予本应用和 `luci-base` 的会话）：保存并应用（启用 / 停用）、启动 / 停止 / 重启、状态读取和 inspect，以及 ACL 对无关文件、无关命令和其他配置的拒绝
 
-未验证：IPv6 / AAAA（设备没有原生 IPv6）、浏览器里的页面显示、版本升级。验收中发现的问题（例如 IPv4 探测依赖 `1.1.1.1`，在该设备的上行网络上不通；在 LuCI 清空 Token 后 `/etc/cfddns.env` 仍保留旧 Token）见验收记录。
+未验证：IPv6 / AAAA（设备没有原生 IPv6）、浏览器里的页面显示、版本升级。验收中发现的问题（例如 IPv4 探测依赖 `1.1.1.1`，在该设备的上行网络上不通）见验收记录。其中“在 LuCI 清空 Token 后 `/etc/cfddns.env` 仍保留旧 Token”已在 `cfddns` 0.3.0-2、`luci-app-cfddns` 0.1.1 修复，尚未在真机上复验。
 
 ---
 
@@ -71,7 +71,7 @@ opkg install cfddns              # 只要核心：UCI + 服务，没有页面
 
 ## 配置
 
-`/etc/config/cfddns`（UCI）是唯一配置来源，用 LuCI 页面或 `uci` 修改：
+`/etc/config/cfddns`（UCI）是唯一配置来源，推荐用 LuCI 页面修改，也可以用 `uci`：
 
 | 选项 | 默认 | 说明 |
 |------|------|------|
@@ -82,11 +82,20 @@ opkg install cfddns              # 只要核心：UCI + 服务，没有页面
 | `token` | — | **必填** Cloudflare API Token（`Zone:DNS:Edit` + `Zone:Zone:Read`） |
 | `period` | `5m` | 更新周期，最小 `10s` |
 
-`domain_v4` / `domain_v6` 至少一个。命令行：
+`domain_v4` / `domain_v6` 至少一个。
+
+命令行配置时，不要把 Token 写在命令行上（如 `uci set`），否则它会进进程参数和 shell 历史。先把 Token 存进 `0600` 的临时文件，这一行执行后粘贴 Token，回车，再按 `Ctrl-D`：
 
 ```sh
+(umask 077; cat >/tmp/cfddns.token)
+```
+
+再用 shell 内建的 `printf` 把它从 stdin 交给 `uci batch`，删除临时文件，然后设置其余选项：
+
+```sh
+printf "set cfddns.main.token='%s'\n" "$(cat /tmp/cfddns.token)" | uci batch
+rm -f /tmp/cfddns.token
 uci set cfddns.main.domain_v4=home.example.com
-uci set cfddns.main.token='YOUR_CF_TOKEN'
 uci set cfddns.main.enabled=1
 uci commit cfddns
 /etc/init.d/cfddns enable
@@ -94,6 +103,10 @@ uci commit cfddns
 ```
 
 `/etc/cfddns.env` 由 `/usr/libexec/cfddns-config` 从 UCI 生成（`0600`），每次 start / reload 覆盖：不要手改，也不要 `source` / `.` 它，Token 里可能有 `$`、反引号等字符。
+
+清空 `token`，或同时清空 `domain_v4` 和 `domain_v6` 后，下一次保存并应用或 `reload` 会删除 `/etc/cfddns.env` 并停止服务（`enabled=0` 时算成功，`enabled=1` 时报错），`cfddns -inspect`、`cfddns -once` 也不能再使用旧 Token，「运行状态」显示尚未配置。其他无效值（周期、域名格式等）只报错，保留上一份可用的 env。
+
+从 0.3.0-1 升级不会自动处理已经残留的 env：如果之前清空过 Token，升级后执行一次 `/etc/init.d/cfddns reload`，或在 LuCI 点一次保存并应用。
 
 运行状态：LuCI「运行状态」标签页，或 `/var/run/cfddns.status`；日志 `logread -e cfddns`。
 

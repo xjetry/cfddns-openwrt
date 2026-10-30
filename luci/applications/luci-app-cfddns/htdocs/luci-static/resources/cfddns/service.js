@@ -5,6 +5,9 @@
 
 var INIT = '/etc/init.d/cfddns';
 var GENERATOR = '/usr/libexec/cfddns-config';
+/* The generator's exit status when Token or both domains are empty: it removed
+ * the env file. */
+var UNCONFIGURED = 3;
 
 var callServiceList = rpc.declare({
 	object: 'service',
@@ -135,7 +138,10 @@ return baseclass.extend({
 	 * generator and init script read it, then regenerate the env file and
 	 * set boot autostart and the run state to match enabled. The generator
 	 * checks Token and domains whatever enabled is, so when disabling it
-	 * runs last: an incomplete config must not keep the service running. */
+	 * runs last: an incomplete config must not keep the service running.
+	 * Disabling with them cleared is a success, resolved with unconfigured
+	 * set; enabling with them cleared stops the service, as its env file is
+	 * gone, and rejects. */
 	apply: function(enabled) {
 		if (typeof(enabled) != 'boolean')
 			return Promise.reject(new TypeError('apply() expects a boolean'));
@@ -146,8 +152,16 @@ return baseclass.extend({
 
 		if (enabled)
 			return committed.then(function() {
-				return run(GENERATOR);
-			}).then(function() {
+				return exec(GENERATOR);
+			}).then(function(res) {
+				if (res.code === UNCONFIGURED)
+					return run(INIT, [ 'stop' ]).then(function() {
+						throw new Error(_('Token 和至少一个域名为必填，服务已停止'));
+					});
+
+				if (res.code !== 0)
+					throw failure(res);
+
 				return run(INIT, [ 'enable' ]);
 			}).then(function() {
 				return run(INIT, [ 'restart' ]);
@@ -159,9 +173,11 @@ return baseclass.extend({
 			return run(INIT, [ 'stop' ]);
 		}).then(function() {
 			return exec(GENERATOR).then(function(res) {
-				if (res.code !== 0)
+				if (res.code !== 0 && res.code !== UNCONFIGURED)
 					throw new Error(_('服务已停止并已取消开机自启，但配置无效：%s')
 						.format(detail(res) || _('退出码 %d').format(res.code)));
+
+				return { unconfigured: res.code === UNCONFIGURED };
 			}, function(err) {
 				throw new Error(_('服务已停止并已取消开机自启，但未能生成配置：%s').format(err.message));
 			});

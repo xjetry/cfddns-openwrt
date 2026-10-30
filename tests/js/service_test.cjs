@@ -71,13 +71,48 @@ test('test_apply_disabled_sequence', async () => {
 	// Turning the service off must not depend on a valid config, so disable
 	// and stop run before the env is regenerated.
 	const { service, log } = setup();
-	await service.apply(false);
+	const res = await service.apply(false);
 	assert.deepEqual(log, [COMMIT, { exec: `${INIT} disable` }, { exec: `${INIT} stop` }, { exec: GEN }]);
+	assert.deepEqual(plain(res), { unconfigured: false });
+});
+
+test('test_apply_disabled_with_cleared_credentials_resolves', async () => {
+	// Generator exit 3: Token or both domains are empty and the env is gone.
+	// That is what the user asked for, not a failure.
+	const stderr = 'cfddns-config: token empty, removed /etc/cfddns.env\n';
+	const { service, log } = setup({ exec: { [GEN]: { code: 3, stderr } } });
+	const res = await service.apply(false);
+	assert.deepEqual(log, [COMMIT, { exec: `${INIT} disable` }, { exec: `${INIT} stop` }, { exec: GEN }]);
+	assert.deepEqual(plain(res), { unconfigured: true });
+});
+
+test('test_apply_enabled_with_cleared_credentials_stops', async () => {
+	// The env is gone, so nothing may keep running on the config the daemon
+	// loaded earlier, and the service must not be enabled or restarted.
+	const stderr = 'cfddns-config: domain_v4 and domain_v6 empty, removed /etc/cfddns.env\n';
+	{
+		const { service, log } = setup({ exec: { [GEN]: { code: 3, stderr } } });
+		const err = await rejection(service.apply(true));
+		assert.deepEqual(log, [COMMIT, { exec: GEN }, { exec: `${INIT} stop` }]);
+		assert.equal(err.message, 'Token 和至少一个域名为必填，服务已停止');
+	}
+
+	// A failed stop must not be reported as stopped.
+	{
+		const { service, log } = setup({
+			exec: { [GEN]: { code: 3, stderr }, [`${INIT} stop`]: { code: 1, stderr: 'boom stop\n' } },
+		});
+		const err = await rejection(service.apply(true));
+		assert.deepEqual(log, [COMMIT, { exec: GEN }, { exec: `${INIT} stop` }]);
+		assert.match(err.message, /boom stop/);
+		assert.doesNotMatch(err.message, /服务已停止/);
+	}
 });
 
 test('test_apply_disabled_with_invalid_config_still_stops', async () => {
-	for (const stderr of ['cfddns-config: token is required\n', 'cfddns-config: set domain_v4, domain_v6 or both\n']) {
-		const { service, log } = setup({ exec: { [GEN]: { code: 1, stderr } } });
+	for (const [code, stderr] of [[1, 'cfddns-config: domain_v4 is not a valid host name\n'],
+		[1, 'cfddns-config: period must be whole h/m/s units\n'], [2, 'sh: syntax error\n'], [127, 'not found\n']]) {
+		const { service, log } = setup({ exec: { [GEN]: { code, stderr } } });
 		const err = await rejection(service.apply(false));
 		assert.deepEqual(log, [COMMIT, { exec: `${INIT} disable` }, { exec: `${INIT} stop` }, { exec: GEN }]);
 		assert.match(err.message, /^服务已停止并已取消开机自启，但配置无效：/);
@@ -104,12 +139,17 @@ test('test_apply_rejects_non_boolean', async () => {
 test('test_apply_failure_stops_sequence', async () => {
 	// Enabling: a config-generation failure stops before any service
 	// operation, and the rejection carries the generator's diagnostic.
-	{
-		const stderr = 'cfddns-config: token is required\n';
-		const { service, log } = setup({ exec: { [GEN]: { code: 1, stderr } } });
+	for (const code of [1, 2, 127]) {
+		const stderr = 'cfddns-config: period must be whole h/m/s units\n';
+		const { service, log } = setup({ exec: { [GEN]: { code, stderr } } });
 		const err = await rejection(service.apply(true));
-		assert.match(err.message, /cfddns-config: token is required/);
+		assert.match(err.message, /cfddns-config: period must be whole h\/m\/s units/);
 		assert.doesNotMatch(err.message, /已停止/);
+		assert.deepEqual(log, [COMMIT, { exec: GEN }]);
+	}
+	{
+		const { service, log } = setup({ exec: { [GEN]: 6 } });
+		await rejection(service.apply(true));
 		assert.deepEqual(log, [COMMIT, { exec: GEN }]);
 	}
 
@@ -208,6 +248,15 @@ test('test_manual_start_runs_generator_first', async () => {
 		const { service, log } = setup({ exec: { [GEN]: { code: 1, stderr } } });
 		const err = await rejection(service.action(name));
 		assert.match(err.message, /period must be whole h\/m\/s units/);
+		assert.deepEqual(log, [GET_ENABLED, { exec: GEN }]);
+	}
+
+	// Cleared credentials are no different here: the init script is not run.
+	for (const name of ['start', 'restart']) {
+		const stderr = 'cfddns-config: token empty, removed /etc/cfddns.env\n';
+		const { service, log } = setup({ exec: { [GEN]: { code: 3, stderr } } });
+		const err = await rejection(service.action(name));
+		assert.match(err.message, /token empty/);
 		assert.deepEqual(log, [GET_ENABLED, { exec: GEN }]);
 	}
 });

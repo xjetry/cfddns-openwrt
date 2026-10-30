@@ -7,7 +7,7 @@ LUCI_DEPENDS:=+luci-base +cfddns
 LUCI_EXTRA_DEPENDS:=cfddns (>=0.3.0)
 LUCI_PKGARCH:=all
 
-PKG_VERSION:=0.1.0
+PKG_VERSION:=0.1.1
 PKG_RELEASE:=1
 
 # This feed is not the LuCI tree: use luci.mk from the SDK's LuCI feed.

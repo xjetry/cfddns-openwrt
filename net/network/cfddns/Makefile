@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cfddns
 PKG_VERSION:=0.3.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 # The verified core release binary is packaged as is; nothing is compiled.
 PKG_SOURCE:=cfddns-linux-arm64-$(PKG_VERSION)

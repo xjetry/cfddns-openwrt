@@ -100,11 +100,13 @@ return view.extend({
 
 		return map.save(null, true).then(function() {
 			return service.apply(uci.get('cfddns', 'main', 'enabled') == '1');
-		}).then(function() {
-			ui.addNotification(null, E('p', _('设置已保存并应用。')), 'info');
+		}).then(function(res) {
+			ui.addNotification(null, E('p', [ (res && res.unconfigured)
+				? _('服务已停止并已取消开机自启；Token 或域名为空，已清除派生配置。')
+				: _('设置已保存并应用。') ]), 'info');
 		}, function(err) {
 			ui.addNotification(null, E('p', { 'style': 'white-space:pre-wrap' },
-				_('保存并应用失败：%s').format((err && err.message) ? err.message : String(err))), 'danger');
+				[ _('保存并应用失败：%s').format((err && err.message) ? err.message : String(err)) ]), 'danger');
 		}).finally(function() {
 			/* The commit cleared the staged changes the header counter shows. */
 			ui.changes.init();

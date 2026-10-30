@@ -73,6 +73,13 @@ valid_config() {
 	opt period 2m
 }
 
+# old_env stores a working env file and a copy to compare it with.
+old_env() {
+	printf 'CFDDNS_V4=old.example.com\nCFDDNS_TOKEN=old-SENTINEL\nCFDDNS_PERIOD=5m\n' >"$ENV_FILE"
+	chmod 600 "$ENV_FILE"
+	cp "$ENV_FILE" "$WORK/original"
+}
+
 fail() {
 	echo "    $*"
 	exit 1
@@ -106,6 +113,26 @@ assert_failed() {
 	if [ -n "$1" ] && ! grep -q -- "$1" "$WORK/stderr"; then
 		fail "stderr does not mention $1: $(cat "$WORK/stderr")"
 	fi
+}
+
+# assert_rejected: exit status 1, a diagnostic, and the old_env file untouched.
+assert_rejected() {
+	[ "$RC" = 1 ] || fail "exit status $RC, want 1; stderr: $(cat "$WORK/stderr")"
+	assert_failed
+	cmp -s "$WORK/original" "$ENV_FILE" || fail "existing env file changed"
+	assert_mode -rw-------
+	assert_only_env_in_dir
+}
+
+# assert_unconfigured MISSING: exit status 3, no stdout, nothing left next to
+# the env file, and stderr is exactly the one line naming the MISSING options,
+# so no value can appear in it.
+assert_unconfigured() {
+	[ "$RC" = 3 ] || fail "exit status $RC, want 3; stderr: $(cat "$WORK/stderr")"
+	[ ! -s "$WORK/stdout" ] || fail "unexpected stdout: $(cat "$WORK/stdout")"
+	[ "$(cat "$WORK/stderr")" = "cfddns-config: $1 empty, removed $ENV_FILE" ] ||
+		fail "unexpected stderr: $(cat "$WORK/stderr")"
+	[ -z "$(ls -A "$WORK/etc")" ] || fail "left next to the env file: $(ls -A "$WORK/etc")"
 }
 
 # assert_env compares the env file with the expected content on stdin.
@@ -186,27 +213,98 @@ CFDDNS_PERIOD=2m
 EOF
 }
 
-test_missing_token_fails() {
-	valid_config
-	unset_opt token
-	run_gen
-	assert_failed token
-	assert_no_env
-
-	opt token ''
-	run_gen
-	assert_failed token
-	assert_no_env
+test_missing_token_removes_env() {
+	for form in unset empty; do
+		reset_uci
+		valid_config
+		old_env
+		case $form in
+		unset) unset_opt token ;;
+		empty) opt token '' ;;
+		esac
+		run_gen
+		assert_unconfigured token
+	done
 }
 
-test_missing_both_domains_fails() {
+test_missing_both_domains_removes_env() {
+	for form in unset empty mixed; do
+		reset_uci
+		valid_config
+		old_env
+		case $form in
+		unset) unset_opt domain_v4 && unset_opt domain_v6 ;;
+		empty) opt domain_v4 '' && opt domain_v6 '' ;;
+		mixed) opt domain_v4 '' && unset_opt domain_v6 ;;
+		esac
+		run_gen
+		assert_unconfigured 'domain_v4 and domain_v6'
+	done
+}
+
+test_missing_token_and_domains_names_both() {
+	old_env
+	opt enabled 0
+	opt period 5m
+	run_gen
+	assert_unconfigured 'token, domain_v4 and domain_v6'
+}
+
+test_unconfigured_without_env_is_not_an_error() {
+	valid_config
+	opt token ''
+	run_gen
+	assert_unconfigured token
+
 	valid_config
 	opt domain_v4 ''
-	unset_opt domain_v6
-	unset_opt v6_iface
+	opt domain_v6 ''
 	run_gen
-	assert_failed domain
-	assert_no_env
+	assert_unconfigured 'domain_v4 and domain_v6'
+}
+
+# Clearing credentials must work whatever else the form still holds.
+test_unconfigured_check_runs_first() {
+	for breakage in bad-period bad-domain unsafe-domain iface-without-domain; do
+		reset_uci
+		valid_config
+		old_env
+		opt token ''
+		case $breakage in
+		bad-period) opt period 5s ;;
+		bad-domain) opt domain_v4 home_.example.com ;;
+		unsafe-domain) opt domain_v6 'x y' ;;
+		iface-without-domain) opt domain_v6 '' ;;
+		esac
+		run_gen
+		assert_unconfigured token
+	done
+
+	for breakage in bad-period unsafe-token unsafe-iface iface; do
+		reset_uci
+		valid_config
+		old_env
+		opt domain_v4 ''
+		opt domain_v6 ''
+		case $breakage in
+		bad-period) opt period 5s ;;
+		unsafe-token) opt token "$TOKEN;" ;;
+		unsafe-iface) opt v6_iface 'br lan' ;;
+		iface) ;;
+		esac
+		run_gen
+		assert_unconfigured 'domain_v4 and domain_v6'
+	done
+}
+
+test_unremovable_env_is_reported() {
+	valid_config
+	opt token ''
+	mkdir "$ENV_FILE"
+	run_gen
+	[ "$RC" = 1 ] || fail "exit status $RC, want 1; stderr: $(cat "$WORK/stderr")"
+	assert_failed 'cannot remove'
+	! grep -q removed "$WORK/stderr" || fail "claims a removal that failed: $(cat "$WORK/stderr")"
 }
 
 test_missing_uci_section_fails() {
@@ -218,26 +316,24 @@ test_missing_uci_section_fails() {
 }
 
 test_invalid_config_preserves_existing_env() {
-	printf 'CFDDNS_V4=old.example.com\nCFDDNS_TOKEN=old-SENTINEL\nCFDDNS_PERIOD=5m\n' >"$ENV_FILE"
-	chmod 600 "$ENV_FILE"
-	cp "$ENV_FILE" "$WORK/original"
-	for breakage in no-section no-token no-domain unsafe-token bad-domain bad-iface bad-period; do
+	old_env
+	for breakage in no-section no-section-empty unsafe-token unsafe-domain bad-domain dot-domains \
+		bad-iface slash-iface bad-period; do
 		reset_uci
 		valid_config
 		case $breakage in
 		no-section) rm "$WORK/uci/.section" ;;
-		no-token) unset_opt token ;;
-		no-domain) opt domain_v4 '' && opt domain_v6 '' && opt v6_iface '' ;;
+		no-section-empty) rm "$WORK/uci/.section" && unset_opt token && unset_opt domain_v4 && unset_opt domain_v6 ;;
 		unsafe-token) opt token "$TOKEN;" ;;
+		unsafe-domain) opt domain_v4 'x y' ;;
 		bad-domain) opt domain_v4 home_.example.com ;;
+		dot-domains) opt domain_v4 . && opt domain_v6 . && opt v6_iface '' ;;
 		bad-iface) opt domain_v6 '' ;;
+		slash-iface) opt v6_iface br/lan ;;
 		bad-period) opt period 5s ;;
 		esac
 		run_gen
-		assert_failed
-		cmp -s "$WORK/original" "$ENV_FILE" || fail "$breakage: existing env file changed"
-		assert_mode -rw-------
-		assert_only_env_in_dir
+		(assert_rejected) || fail "$breakage: invalid config must keep the env"
 	done
 }
 
@@ -376,8 +472,12 @@ TESTS="
 test_full_config_writes_expected_env
 test_optional_values_are_omitted
 test_disabled_still_generates_env
-test_missing_token_fails
-test_missing_both_domains_fails
+test_missing_token_removes_env
+test_missing_both_domains_removes_env
+test_missing_token_and_domains_names_both
+test_unconfigured_without_env_is_not_an_error
+test_unconfigured_check_runs_first
+test_unremovable_env_is_reported
 test_missing_uci_section_fails
 test_invalid_config_preserves_existing_env
 test_env_unsafe_value_fails_without_echoing_token

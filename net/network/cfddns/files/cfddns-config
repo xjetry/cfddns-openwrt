@@ -3,6 +3,8 @@
 # authoritative configuration; the env file is what cfddns (daemon, -once and
 # -inspect) reads. The file is replaced atomically and only when every value is
 # valid, so a bad UCI edit never clobbers the last working configuration.
+# Clearing the Token or both domains is not a bad edit: nothing may keep using
+# them, so the file is removed and the exit status is 3.
 # Nothing is printed on success; errors name options but never their values.
 
 export LC_ALL=C
@@ -102,13 +104,20 @@ v6_iface=$(uci -q get cfddns.main.v6_iface)
 token=$(uci -q get cfddns.main.token)
 period=$(uci -q get cfddns.main.period)
 
+missing=
+[ -n "$token" ] || missing=token
+[ -n "$domain_v4" ] || [ -n "$domain_v6" ] || missing="${missing:+$missing, }domain_v4 and domain_v6"
+if [ -n "$missing" ]; then
+	rm -f "$ENV_FILE" || fail "cannot remove $ENV_FILE"
+	echo "cfddns-config: $missing empty, removed $ENV_FILE" >&2
+	exit 3
+fi
+
 env_safe "$domain_v4" || fail "domain_v4 $UNSAFE"
 env_safe "$domain_v6" || fail "domain_v6 $UNSAFE"
 env_safe "$v6_iface" || fail "v6_iface $UNSAFE"
 env_safe "$token" || fail "token $UNSAFE"
 env_safe "$period" || fail "period $UNSAFE"
-
-[ -n "$token" ] || fail "token is required"
 
 domain_v4=$(normalize_host "${domain_v4%.}")
 domain_v6=$(normalize_host "${domain_v6%.}")

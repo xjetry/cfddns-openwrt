@@ -127,19 +127,57 @@ test_stop_removes_status_file() {
 test_reload_regenerates_env_and_restarts_only_when_enabled() {
 	require "$INIT"
 	body=$(shell_function "$INIT" reload_service)
-	generate=$(printf '%s\n' "$body" | line_number '/usr/libexec/cfddns-config || return 1')
+	generate=$(printf '%s\n' "$body" | line_number '/usr/libexec/cfddns-config')
 	check=$(printf '%s\n' "$body" | line_number 'enabled')
 	restart=$(printf '%s\n' "$body" | line_number '^[[:space:]]*restart$')
-	[ "$generate" = 1 ] || fail "reload_service must first regenerate the env and stop on failure"
+	[ "$generate" = 1 ] || fail "reload_service must first regenerate the env"
 	[ -n "$check" ] && [ -n "$restart" ] && [ "$check" -lt "$restart" ] ||
 		fail "reload_service must restart only after checking enabled"
+}
+
+# reload_calls GENERATOR_STATUS UCI_ENABLED runs reload_service with a generator
+# exiting GENERATOR_STATUS and stubs for rc.common, and prints the init verbs it
+# called and its return status.
+reload_calls() {
+	{
+		printf 'uci_enabled() { [ %s = 1 ]; }\n' "$2"
+		echo 'stop() { echo stop; }'
+		echo 'restart() { echo restart; }'
+		echo 'reload_service() {'
+		shell_function "$INIT" reload_service | sed "s|/usr/libexec/cfddns-config|(exit $1)|"
+		echo '}'
+		echo 'reload_service'
+		echo 'echo "return $?"'
+	} >"$TMP_ROOT/reload"
+	sh "$TMP_ROOT/reload" | tr '\n' ' '
+}
+
+# Generator exit 3 means Token or both domains are empty and the env is gone:
+# no daemon may keep running on what it loaded earlier, and that is only an
+# error when UCI still wants the service on.
+test_reload_follows_generator_status() {
+	require "$INIT"
+	while read -r status enabled want; do
+		got=$(reload_calls "$status" "$enabled")
+		[ "$got" = "$want " ] ||
+			fail "generator exit $status, UCI enabled $enabled: got '$got', want '$want '"
+	done <<'EOF'
+0 1 restart return 0
+0 0 stop return 0
+3 1 stop return 1
+3 0 stop return 0
+1 1 return 1
+1 0 return 1
+2 1 return 1
+127 0 return 1
+EOF
 }
 
 test_package_metadata() {
 	require "$PKG_MK"
 	[ "$(make_var PKG_NAME)" = cfddns ] || fail "PKG_NAME"
 	[ "$(make_var PKG_VERSION)" = 0.3.0 ] || fail "PKG_VERSION must be 0.3.0"
-	[ "$(make_var PKG_RELEASE)" = 1 ] || fail "PKG_RELEASE must be 1"
+	[ "$(make_var PKG_RELEASE)" = 2 ] || fail "PKG_RELEASE must be 2"
 	url=$(make_var PKG_SOURCE_URL | sed 's/\$(PKG_VERSION)/0.3.0/')
 	[ "${url%/}/$(make_var PKG_SOURCE_URL_FILE)" = "$CORE_URL" ] ||
 		fail "source must be $CORE_URL"
@@ -247,9 +285,12 @@ test_generator_ignores_overrides_as_root() {
 		[ "$n" -gt "$root" ] && [ "$n" -lt "$end" ] ||
 			fail "line $n honours an override outside the non-root branch: $(sed -n "${n}p" "$code")"
 	done || exit 1
-	first_tool=$(grep -nE '(^|[^A-Za-z0-9_])(uci|mktemp|mv) ' "$code" | head -n 1 | cut -d: -f1)
+	first_tool=$(grep -nE '(^|[^A-Za-z0-9_])(uci|mktemp|mv|rm) ' "$code" | head -n 1 | cut -d: -f1)
 	[ -n "$first_tool" ] && [ "$first_tool" -gt "$end" ] ||
-		fail "uci, mktemp and mv must only run after the root check"
+		fail "uci, mktemp, mv and rm must only run after the root check"
+	# Removing the env is a root write too: only the pinned path may be named.
+	has_line 'rm -f "$ENV_FILE" || fail "cannot remove $ENV_FILE"' <"$code" ||
+		fail "cfddns-config must remove \$ENV_FILE and report a failed removal"
 }
 
 TESTS="
@@ -259,6 +300,7 @@ test_procd_command_exact
 test_start_service_checks_enabled_then_generates_env
 test_stop_removes_status_file
 test_reload_regenerates_env_and_restarts_only_when_enabled
+test_reload_follows_generator_status
 test_package_metadata
 test_package_installs_files_with_modes
 test_preinst_refuses_manual_install

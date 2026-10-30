@@ -32,7 +32,21 @@ stop_service() {
 }
 
 reload_service() {
-	/usr/libexec/cfddns-config || return 1
+	/usr/libexec/cfddns-config
+	case $? in
+	0) ;;
+	3)
+		# Token or both domains were cleared and the env file is gone: a
+		# running daemon must not keep the configuration it loaded earlier.
+		stop
+		uci_enabled && return 1
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+
 	if uci_enabled; then
 		restart
 	else

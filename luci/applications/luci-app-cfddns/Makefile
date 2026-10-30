@@ -2,9 +2,11 @@ include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=LuCI support for Cloudflare DDNS (cfddns)
 # DEPENDS cannot carry a version; luci.mk passes LUCI_EXTRA_DEPENDS to the
-# package control file, which needs the core's status and inspect support.
+# package control file, which needs the core's status and inspect support and
+# the generator's exit status 3 ("unconfigured"): Save & Apply relies on it to
+# clear the env file, which the generator in cfddns 0.3.0-1 keeps.
 LUCI_DEPENDS:=+luci-base +cfddns
-LUCI_EXTRA_DEPENDS:=cfddns (>=0.3.0)
+LUCI_EXTRA_DEPENDS:=cfddns (>=0.3.0-2)
 LUCI_PKGARCH:=all
 
 PKG_VERSION:=0.1.1

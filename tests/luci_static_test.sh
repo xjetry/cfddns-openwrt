@@ -79,8 +79,8 @@ test_package_metadata() {
 	# versioned control-file dependency; plain DEPENDS cannot carry versions.
 	[ "$(make_var LUCI_PKGARCH)" = all ] || fail "LUCI_PKGARCH (PKGARCH:=all) must be all"
 	[ "$(make_var LUCI_DEPENDS)" = '+luci-base +cfddns' ] || fail "LUCI_DEPENDS must be +luci-base +cfddns"
-	[ "$(make_var LUCI_EXTRA_DEPENDS)" = 'cfddns (>=0.3.0)' ] ||
-		fail "LUCI_EXTRA_DEPENDS must be cfddns (>=0.3.0)"
+	[ "$(make_var LUCI_EXTRA_DEPENDS)" = 'cfddns (>=0.3.0-2)' ] ||
+		fail "LUCI_EXTRA_DEPENDS must be cfddns (>=0.3.0-2)"
 	has_line 'include $(TOPDIR)/feeds/luci/luci.mk' <"$APP_MK" ||
 		fail "Makefile must include the SDK's \$(TOPDIR)/feeds/luci/luci.mk"
 	has_line '# call BuildPackage - OpenWrt buildroot signature' <"$APP_MK" ||

@@ -25,7 +25,7 @@ Depends: libc, ca-bundle
 Architecture: $ARCH"
 LUCI_CONTROL="Package: luci-app-cfddns
 Version: 0.1.1
-Depends: cfddns (>=0.3.0), libc, luci-base, cfddns
+Depends: cfddns (>=0.3.0-2), libc, luci-base, cfddns
 Architecture: all"
 REAL_MAKE=$(command -v make)
 
@@ -536,7 +536,7 @@ test_build_feed_with_fake_sdk() {
 		fail "feeds.conf must hold the SDK's luci feed and this feed: $(cat "$sdk/feeds.conf")"
 	grep -qx 'feeds uninstall luci-base' "$FAKE_SDK_LOG" || fail "luci-base must be uninstalled before the build"
 	[ ! -L "$sdk/package/feeds/luci/luci-base" ] || fail "luci-base still installed"
-	grep -qxF 'build-feed:   Depends: cfddns (>=0.3.0), libc, luci-base, cfddns' "$WORK/stdout" ||
+	grep -qxF 'build-feed:   Depends: cfddns (>=0.3.0-2), libc, luci-base, cfddns' "$WORK/stdout" ||
 		fail "build-feed must report the LuCI Depends line: $(cat "$WORK/stdout")"
 
 	for breakage in core-arch luci-arch luci-unversioned core-binary luci-extra-file luci-changed-file; do
@@ -553,7 +553,7 @@ test_build_feed_with_fake_sdk() {
 			;;
 		luci-unversioned)
 			luci=$(printf '%s\n' "$LUCI_CONTROL" | sed 's/^Depends: .*/Depends: libc, luci-base, cfddns/')
-			want='cfddns (>=0.3.0)'
+			want='cfddns (>=0.3.0-2)'
 			;;
 		core-binary)
 			binary="rebuilt binary"

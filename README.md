@@ -70,10 +70,11 @@ opkg install luci-app-cfddns     # 页面 + 核心，自动带上 cfddns 和 ca-
 opkg install cfddns              # 只要核心：UCI + 服务，没有页面
 ```
 
-升级时两个包一起升：新的 `cfddns` 配旧的 `luci-app-cfddns`，在 LuCI 清空 Token 后运行中的服务仍在用旧 Token。先 `opkg update`，按上面校验索引签名，输出 `OK` 后：
+升级：先 `opkg update`，按上面校验索引签名，输出 `OK` 后再升。装了页面的两个包一起升：新的 `cfddns` 配旧的 `luci-app-cfddns`，在 LuCI 清空 Token 后运行中的服务仍在用旧 Token。只装核心的只升 `cfddns`：`opkg upgrade` 会把列出但没装的包装上，连同 `luci-base`。
 
 ```sh
-opkg upgrade cfddns luci-app-cfddns
+opkg upgrade cfddns luci-app-cfddns   # 装了页面：两个一起升
+opkg upgrade cfddns                   # 只装了核心
 ```
 
 ---

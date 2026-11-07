@@ -765,6 +765,21 @@ EOF
 	[ ! -e "$file" ] || fail "the README must delete the Token file"
 }
 
+# opkg upgrade installs a named package that is not installed, so a router
+# with only the core needs its own command that names only cfddns. Either
+# upgrade comes after the index is verified.
+test_readme_upgrades_only_installed_packages() {
+	readme_commands >"$WORK/commands"
+	upgrades=$(grep -E '^[0-9]+:opkg upgrade ' "$WORK/commands" | cut -d: -f2- |
+		sed 's/[[:space:]]*#.*//' | sort | tr '\n' '|')
+	[ "$upgrades" = "opkg upgrade cfddns|opkg upgrade cfddns luci-app-cfddns|" ] ||
+		fail "README upgrade commands are '$upgrades', want one for page + core and one naming only cfddns"
+	verify=$(command_line '.*usign -V ')
+	upgrade=$(command_line 'opkg upgrade ')
+	[ -n "$verify" ] && [ "$verify" -lt "$upgrade" ] ||
+		fail "README must verify the index (line $verify) before opkg upgrade (line $upgrade)"
+}
+
 # Exit 3 is what makes clearing credentials safe to document, so the README
 # has to say what happens.
 test_readme_documents_cleared_credentials() {
@@ -785,6 +800,7 @@ test_preinst_detects_manual_install
 test_readme_verifies_index_before_install
 test_readme_verify_command_checks_the_gzip_list
 test_readme_keeps_token_out_of_argv
+test_readme_upgrades_only_installed_packages
 test_readme_documents_cleared_credentials
 "
 

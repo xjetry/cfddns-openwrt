@@ -1,14 +1,14 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cfddns
-PKG_VERSION:=0.3.0
-PKG_RELEASE:=2
+PKG_VERSION:=0.3.1
+PKG_RELEASE:=1
 
 # The verified core release binary is packaged as is; nothing is compiled.
 PKG_SOURCE:=cfddns-linux-arm64-$(PKG_VERSION)
 PKG_SOURCE_URL:=https://github.com/xjetry/cfddns/releases/download/v$(PKG_VERSION)
 PKG_SOURCE_URL_FILE:=cfddns-linux-arm64
-PKG_HASH:=b5879b25a411ea8ed2c74ba90c9e7d215f54840a9eb0a1f953d30838161c1436
+PKG_HASH:=5b8a6c21c0a9fc4310e70c6f2b5f7c3338bcd4ba12001bd303e3f40bd86d35a2
 
 include $(INCLUDE_DIR)/package.mk
 

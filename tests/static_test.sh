@@ -9,8 +9,14 @@ PKG_MK=$PKG/Makefile
 UCI_DEFAULTS=$PKG/files/cfddns.config
 INIT=$PKG/files/cfddns.init
 GEN=$PKG/files/cfddns-config
+WORKFLOW=$ROOT/.github/workflows/feed.yml
 DAEMON_COMMAND="/usr/bin/cfddns -status-file /var/run/cfddns.status"
-CORE_URL=https://github.com/xjetry/cfddns/releases/download/v0.3.0/cfddns-linux-arm64
+# The packaged core release: its cfddns-linux-arm64 SHA256 as published in the
+# release's SHA256SUMS.
+CORE_VERSION=0.3.1
+CORE_RELEASE=1
+CORE_HASH=5b8a6c21c0a9fc4310e70c6f2b5f7c3338bcd4ba12001bd303e3f40bd86d35a2
+CORE_URL=https://github.com/xjetry/cfddns/releases/download/v$CORE_VERSION/cfddns-linux-arm64
 
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/cfddns-static-test.XXXXXX") || exit 1
 trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -176,21 +182,34 @@ EOF
 test_package_metadata() {
 	require "$PKG_MK"
 	[ "$(make_var PKG_NAME)" = cfddns ] || fail "PKG_NAME"
-	[ "$(make_var PKG_VERSION)" = 0.3.0 ] || fail "PKG_VERSION must be 0.3.0"
-	[ "$(make_var PKG_RELEASE)" = 2 ] || fail "PKG_RELEASE must be 2"
-	url=$(make_var PKG_SOURCE_URL | sed 's/\$(PKG_VERSION)/0.3.0/')
+	[ "$(make_var PKG_VERSION)" = "$CORE_VERSION" ] || fail "PKG_VERSION must be $CORE_VERSION"
+	[ "$(make_var PKG_RELEASE)" = "$CORE_RELEASE" ] || fail "PKG_RELEASE must be $CORE_RELEASE"
+	url=$(make_var PKG_SOURCE_URL | sed "s/\\\$(PKG_VERSION)/$CORE_VERSION/")
 	[ "${url%/}/$(make_var PKG_SOURCE_URL_FILE)" = "$CORE_URL" ] ||
 		fail "source must be $CORE_URL"
-	hash=$(make_var PKG_HASH)
-	[ ${#hash} = 64 ] || fail "PKG_HASH must be a SHA256"
-	case $hash in
-	*[!0-9a-f]*) fail "PKG_HASH must be lower-case hex" ;;
-	esac
+	[ "$(make_var PKG_HASH)" = "$CORE_HASH" ] ||
+		fail "PKG_HASH must be the v$CORE_VERSION cfddns-linux-arm64 SHA256 $CORE_HASH"
 	package=$(make_define Package/cfddns)
 	printf '%s\n' "$package" | has_line 'PKGARCH:=aarch64_cortex-a53' ||
 		fail "PKGARCH must be aarch64_cortex-a53"
 	printf '%s\n' "$package" | grep -q '^[[:space:]]*DEPENDS:=.*+ca-bundle' ||
 		fail "package must depend on ca-bundle"
+}
+
+# CI verifies and builds the release named by the workflow's CORE_VERSION, and
+# build-feed.sh refuses a CORE_VERSION other than PKG_VERSION; the documented
+# "make feed" examples must name the same release.
+test_core_version_pins_agree() {
+	require "$PKG_MK" "$WORKFLOW" "$ROOT/Makefile" "$ROOT/README.md"
+	version=$(make_var PKG_VERSION)
+	pinned=$(sed -n 's/^[[:space:]]*CORE_VERSION:[[:space:]]*//p' "$WORKFLOW")
+	[ "$pinned" = "$version" ] ||
+		fail "feed.yml CORE_VERSION is '$pinned', want PKG_VERSION $version"
+	for f in "$ROOT/Makefile" "$ROOT/README.md"; do
+		shown=$(grep -o 'CORE_VERSION=[0-9][^ ]*' "$f" | sort -u | tr '\n' ' ')
+		[ "$shown" = "CORE_VERSION=$version " ] ||
+			fail "${f#"$ROOT"/} shows '$shown', want only CORE_VERSION=$version"
+	done
 }
 
 test_package_installs_files_with_modes() {
@@ -302,6 +321,7 @@ test_stop_removes_status_file
 test_reload_regenerates_env_and_restarts_only_when_enabled
 test_reload_follows_generator_status
 test_package_metadata
+test_core_version_pins_agree
 test_package_installs_files_with_modes
 test_preinst_refuses_manual_install
 test_postrm_cleans_derived_files_only_on_remove

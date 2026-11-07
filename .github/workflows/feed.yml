@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  CORE_VERSION: 0.3.0
+  CORE_VERSION: 0.3.1
   SDK_BASE: https://downloads.openwrt.org/releases/23.05.4/targets/mediatek/filogic
   SDK_FILE: openwrt-sdk-23.05.4-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
   SDK_SHA256: 14cc73986e31d4daeef2a7a66b754c4c0e3b6c02718be2c23025532b336eb855

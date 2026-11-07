@@ -15,12 +15,12 @@ PKG_MK=$ROOT/net/network/cfddns/Makefile
 README=$ROOT/README.md
 TEST_SH=${CFDDNS_TEST_SH:-sh}
 ARCH=aarch64_cortex-a53
-CORE_IPK=cfddns_0.3.0-2_$ARCH.ipk
+CORE_IPK=cfddns_0.3.1-1_$ARCH.ipk
 # luci.mk versions LuCI packages by PKG_VERSION alone.
 LUCI_IPK="luci-app-cfddns_0.1.1_all.ipk"
 MANUAL_PATHS="/usr/bin/cfddns /etc/init.d/cfddns /etc/cfddns.env"
 CORE_CONTROL="Package: cfddns
-Version: 0.3.0-2
+Version: 0.3.1-1
 Depends: libc, ca-bundle
 Architecture: $ARCH"
 LUCI_CONTROL="Package: luci-app-cfddns
@@ -439,10 +439,10 @@ test_feed_requires_exactly_both_packages() {
 	assert_refused luci-app-cfddns
 	mv "$WORK/$LUCI_IPK" "$IPKS/"
 
-	mv "$IPKS/$CORE_IPK" "$IPKS/cfddns_0.3.0-2_aarch64_generic.ipk"
+	mv "$IPKS/$CORE_IPK" "$IPKS/cfddns_0.3.1-1_aarch64_generic.ipk"
 	run_index
 	assert_refused "cfddns_\*_$ARCH.ipk"
-	mv "$IPKS/cfddns_0.3.0-2_aarch64_generic.ipk" "$IPKS/$CORE_IPK"
+	mv "$IPKS/cfddns_0.3.1-1_aarch64_generic.ipk" "$IPKS/$CORE_IPK"
 
 	printf 'older core\n' >"$IPKS/cfddns_0.2.0-1_$ARCH.ipk"
 	run_index
@@ -491,10 +491,10 @@ test_build_feed_checks_inputs() {
 	sh "$BUILD" "$sdk" 0.2.0 "$OUT" "$SECRET" >"$WORK/stdout" 2>"$WORK/stderr"
 	RC=$?
 	assert_refused PKG_VERSION
-	sh "$BUILD" "$sdk" 0.3.0 "$OUT" "$SECRET" >"$WORK/stdout" 2>"$WORK/stderr"
+	sh "$BUILD" "$sdk" 0.3.1 "$OUT" "$SECRET" >"$WORK/stdout" 2>"$WORK/stderr"
 	RC=$?
 	assert_refused SDK
-	sh "$BUILD" "$sdk" 0.3.0 "$OUT" >"$WORK/stdout" 2>"$WORK/stderr"
+	sh "$BUILD" "$sdk" 0.3.1 "$OUT" >"$WORK/stdout" 2>"$WORK/stderr"
 	RC=$?
 	assert_refused usage
 	[ -z "$(ls -A "$sdk")" ] || fail "build-feed.sh changed the SDK before validating its inputs"
@@ -517,7 +517,7 @@ test_build_feed_with_fake_sdk() {
 	# OpenWrt's make also reads OUTPUT_DIR: the SDK must not see them.
 	fake_build "$CORE_CONTROL" "$LUCI_CONTROL" "release binary"
 	PATH=$BIN:$PATH "$REAL_MAKE" -s --no-print-directory -C "$ROOT" feed SDK_DIR="$sdk" \
-		CORE_VERSION=0.3.0 OUTPUT_DIR="$OUT" FEED_KEY="$secret" >"$WORK/stdout" 2>"$WORK/stderr"
+		CORE_VERSION=0.3.1 OUTPUT_DIR="$OUT" FEED_KEY="$secret" >"$WORK/stdout" 2>"$WORK/stderr"
 	RC=$?
 	assert_ok
 	# shellcheck disable=SC2012 # the test controls every file name here
@@ -569,7 +569,7 @@ test_build_feed_with_fake_sdk() {
 			;;
 		esac
 		fake_build "$core" "$luci" "$binary" "$change"
-		run_build "$sdk" 0.3.0 "$OUT" "$secret"
+		run_build "$sdk" 0.3.1 "$OUT" "$secret"
 		assert_refused "$want"
 	done
 }
@@ -597,7 +597,7 @@ test_preinst_detects_manual_install() {
 				*) ln -s "$r/missing-target" "$r$path" ;;
 				esac
 			done
-			for args in install 'install 0.3.0-2'; do
+			for args in install 'install 0.3.1-1'; do
 				# shellcheck disable=SC2086 # split into opkg's arguments
 				run_preinst "$root" $args
 				[ "$RC" = 1 ] || fail "$kind $path: preinst $args exit $RC, want 1"
@@ -700,7 +700,7 @@ test_readme_verify_command_checks_the_gzip_list() {
 	mkdir "$lists"
 	cmd=$(readme_verify_command "$lists" "$WORK/Packages.sig" "$PUBLIC") ||
 		fail "README lacks the Packages.sig download or the usign -V command"
-	printf 'Package: cfddns\nVersion: 0.3.0-2\n\nPackage: luci-app-cfddns\nVersion: 0.1.1\n' >"$WORK/Packages"
+	printf 'Package: cfddns\nVersion: 0.3.1-1\n\nPackage: luci-app-cfddns\nVersion: 0.1.1\n' >"$WORK/Packages"
 	"$SIGNER" -S -m "$WORK/Packages" -s "$SECRET" -x "$WORK/Packages.sig" >/dev/null 2>&1 ||
 		fail "cannot sign the test index"
 
@@ -714,7 +714,7 @@ test_readme_verify_command_checks_the_gzip_list() {
 			gzip -9nc "$WORK/Packages" >"$list"
 			run="usign -V -m $list -x $WORK/Packages.sig -p $PUBLIC"
 			;;
-		tampered) sed 's/0\.3\.0-2/0.3.0-3/' "$WORK/Packages" | gzip -9nc >"$list" ;;
+		tampered) sed 's/0\.3\.1-1/0.3.1-2/' "$WORK/Packages" | gzip -9nc >"$list" ;;
 		esac
 		PATH=$BIN:$PATH sh -c "$run" >"$WORK/out" 2>&1
 		RC=$?

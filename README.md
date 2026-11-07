@@ -2,7 +2,7 @@
 
 [cfddns](https://github.com/xjetry/cfddns) 的 OpenWrt 软件源（opkg feed），两个包：
 
-- `cfddns`（0.3.0-2）：核心，UCI（`/etc/config/cfddns`）+ procd 服务；直接打包 cfddns v0.3.0 Release 的 `cfddns-linux-arm64`（静态链接，SHA256 固定），架构 `aarch64_cortex-a53`
+- `cfddns`（0.3.1-1）：核心，UCI（`/etc/config/cfddns`）+ procd 服务；直接打包 cfddns v0.3.1 Release 的 `cfddns-linux-arm64`（静态链接，SHA256 固定），架构 `aarch64_cortex-a53`
 - `luci-app-cfddns`（0.1.1）：LuCI 页面（服务 → Cloudflare DDNS），「运行状态」「基本设置」两个标签页，架构 `all`
 
 软件源：`https://xjetry.github.io/cfddns-openwrt/aarch64_cortex-a53`
@@ -17,8 +17,9 @@
 |------|------|------|
 | GL-E5800 / Mudi 7 | GL 原厂固件，OpenWrt 23.05.4（`sdx75/generic`） | 待真机验收 |
 | GL-BE10000 / Slate 7 Pro | GL 原厂固件 4.8.6，OpenWrt 21.02（`mediatek/mt7987`） | 部分通过（2026-10-29，仅 IPv4），见下 |
+| GL-BE14000 / Flint 4 | GL 原厂固件 4.9.2，OpenWrt 21.02（`mediatek/mt7988`） | 待真机验收 |
 
-两台的 opkg 都接受 `aarch64_cortex-a53`。包用官方 OpenWrt 23.05.4 `mediatek/filogic` SDK 打包，不是 GL 的厂商 SDK。真机验收完成前不算已支持；其他设备即使架构匹配也未验证，不要靠强改 opkg 架构安装。
+三台的 opkg 都接受 `aarch64_cortex-a53`。包用官方 OpenWrt 23.05.4 `mediatek/filogic` SDK 打包，不是 GL 的厂商 SDK。真机验收完成前不算已支持；其他设备即使架构匹配也未验证，不要靠强改 opkg 架构安装。
 
 GL-BE10000 上已通过的项（[验收记录](docs/acceptance/2026-10-27-gl-be10000.md)，验收版本 `cfddns` 0.3.0-1、`luci-app-cfddns` 0.1.0）：
 
@@ -28,6 +29,8 @@ GL-BE10000 上已通过的项（[验收记录](docs/acceptance/2026-10-27-gl-be1
 - LuCI 页面用到的 rpcd 调用（经 uhttpd `/ubus`、只授予本应用和 `luci-base` 的会话）：保存并应用（启用 / 停用）、启动 / 停止 / 重启、状态读取和 inspect，以及 ACL 对无关文件、无关命令和其他配置的拒绝
 
 未验证：IPv6 / AAAA（设备没有原生 IPv6）、浏览器里的页面显示、版本升级。验收中发现的问题（例如 IPv4 探测依赖 `1.1.1.1`，在该设备的上行网络上不通）见验收记录。其中“在 LuCI 清空 Token 后 `/etc/cfddns.env` 仍保留旧 Token”已在 `cfddns` 0.3.0-2、`luci-app-cfddns` 0.1.1 修复，尚未在真机上复验。
+
+core v0.3.1（`cfddns` 0.3.1-1）起，`1.1.1.1`（v6 为 `2606:4700:4700::1111`）不通时 IPv4 / IPv6 探测改用 `www.cloudflare.com`，尚未在真机上验收。
 
 ---
 
@@ -65,6 +68,12 @@ wget -O /tmp/cfddns-Packages.sig https://xjetry.github.io/cfddns-openwrt/aarch64
 ```sh
 opkg install luci-app-cfddns     # 页面 + 核心，自动带上 cfddns 和 ca-bundle
 opkg install cfddns              # 只要核心：UCI + 服务，没有页面
+```
+
+升级时两个包一起升：新的 `cfddns` 配旧的 `luci-app-cfddns`，在 LuCI 清空 Token 后运行中的服务仍在用旧 Token。先 `opkg update`，按上面校验索引签名，输出 `OK` 后：
+
+```sh
+opkg upgrade cfddns luci-app-cfddns
 ```
 
 ---
@@ -106,6 +115,14 @@ uci commit cfddns
 
 清空 `token`，或同时清空 `domain_v4` 和 `domain_v6` 后，下一次保存并应用或 `reload` 会删除 `/etc/cfddns.env` 并停止服务（`enabled=0` 时算成功，`enabled=1` 时报错），`cfddns -inspect`、`cfddns -once` 也不能再使用旧 Token，「运行状态」显示尚未配置。其他无效值（周期、域名格式等）只报错，保留上一份可用的 env。
 
+删除凭据要清空 `token`（LuCI 里清空后保存并应用，或用上面 stdin 交给 `uci batch` 的写法），不要 `uci delete cfddns.main`：整段不存在算无效配置，会保留上一份 env。命令行：
+
+```sh
+echo "set cfddns.main.token=''" | uci batch
+uci commit cfddns
+/etc/init.d/cfddns reload
+```
+
 从 0.3.0-1 升级不会自动处理已经残留的 env：如果之前清空过 Token，升级后执行一次 `/etc/init.d/cfddns reload`，或在 LuCI 点一次保存并应用。
 
 运行状态：LuCI「运行状态」标签页，或 `/var/run/cfddns.status`；日志 `logread -e cfddns`。
@@ -131,7 +148,7 @@ cfddns -uninstall                            # 停服务，删 init 脚本 / env
 
 ```sh
 make check      # shell / JS / feed 测试，需要 node
-make feed SDK_DIR=<sdk> CORE_VERSION=0.3.0 OUTPUT_DIR=<dir> FEED_KEY=<usign 私钥>
+make feed SDK_DIR=<sdk> CORE_VERSION=0.3.1 OUTPUT_DIR=<dir> FEED_KEY=<usign 私钥>
 ```
 
 - `SDK_DIR`：OpenWrt 23.05.4 `mediatek/filogic` SDK（x86_64 Linux，非 root 运行）。`feeds.conf` 会被替换成本仓库（`src-link`）加 SDK 自带的 luci feed。
@@ -141,4 +158,4 @@ make feed SDK_DIR=<sdk> CORE_VERSION=0.3.0 OUTPUT_DIR=<dir> FEED_KEY=<usign 私�
 
 CI（`.github/workflows/feed.yml`）：每次 push / PR 跑测试、shellcheck，并核对固定的核心哈希；push `main` 时用同一个 SDK 构建，用 secret `CFDDNS_FEED_SIGNING_KEY`（usign 私钥文件的内容）签名，再部署到 GitHub Pages。secret 缺失时直接失败，不发布未签名的索引。
 
-升级核心：同时改 `net/network/cfddns/Makefile` 的 `PKG_VERSION` / `PKG_HASH` 和 workflow 的 `CORE_VERSION`。
+升级核心：同时改 `net/network/cfddns/Makefile` 的 `PKG_VERSION` / `PKG_RELEASE` / `PKG_HASH`、workflow 的 `CORE_VERSION`，以及 `tests/` 里固定的版本和哈希；`make check` 核对它们一致。

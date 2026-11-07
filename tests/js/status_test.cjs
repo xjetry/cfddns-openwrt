@@ -18,7 +18,7 @@ const STATUS = path.join(__dirname,
 const STATUS_FILE = '/var/run/cfddns.status';
 const INSPECT = '/usr/bin/cfddns -inspect';
 
-// Core v0.3.0 outputs, as in its README.
+// Core v0.3.1 outputs (unchanged since v0.3.0), as in its README.
 const LOCAL = {
 	version: 1,
 	started_at: '2026-10-27T08:00:00.412345678Z',

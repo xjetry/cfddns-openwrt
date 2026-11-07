@@ -17,7 +17,7 @@
 |------|------|------|
 | GL-E5800 / Mudi 7 | GL 原厂固件，OpenWrt 23.05.4（`sdx75/generic`） | 待真机验收 |
 | GL-BE10000 / Slate 7 Pro | GL 原厂固件 4.8.6，OpenWrt 21.02（`mediatek/mt7987`） | 部分通过（2026-10-29，仅 IPv4），见下 |
-| GL-BE14000 / Flint 4 | GL 原厂固件 4.9.2，OpenWrt 21.02（`mediatek/mt7988`） | 待真机验收 |
+| GL-BE14000 / Flint 4 | GL 原厂固件 4.9.2，OpenWrt 21.02（`mediatek/mt7988`） | 部分通过（2026-11-08，IPv4 + IPv6；未验证重启和升级），见下 |
 
 三台的 opkg 都接受 `aarch64_cortex-a53`。包用官方 OpenWrt 23.05.4 `mediatek/filogic` SDK 打包，不是 GL 的厂商 SDK。真机验收完成前不算已支持；其他设备即使架构匹配也未验证，不要靠强改 opkg 架构安装。
 
@@ -28,9 +28,18 @@ GL-BE10000 上已通过的项（[验收记录](docs/acceptance/2026-10-27-gl-be1
 - Cloudflare A 记录的创建、内容不同时更新、无变化周期不写入（测试线路上 `1.1.1.1` 不通，IPv4 探测经临时中转）；重启后自启，运行状态重建
 - LuCI 页面用到的 rpcd 调用（经 uhttpd `/ubus`、只授予本应用和 `luci-base` 的会话）：保存并应用（启用 / 停用）、启动 / 停止 / 重启、状态读取和 inspect，以及 ACL 对无关文件、无关命令和其他配置的拒绝
 
-未验证：IPv6 / AAAA（设备没有原生 IPv6）、浏览器里的页面显示、版本升级。验收中发现的问题（例如 IPv4 探测依赖 `1.1.1.1`，在该设备的上行网络上不通）见验收记录。其中“在 LuCI 清空 Token 后 `/etc/cfddns.env` 仍保留旧 Token”已在 `cfddns` 0.3.0-2、`luci-app-cfddns` 0.1.1 修复，尚未在真机上复验。
+未验证：IPv6 / AAAA（设备没有原生 IPv6）、浏览器里的页面显示、版本升级。验收中发现的问题（例如 IPv4 探测依赖 `1.1.1.1`，在该设备的上行网络上不通）见验收记录。其中“在 LuCI 清空 Token 后 `/etc/cfddns.env` 仍保留旧 Token”已在 `cfddns` 0.3.0-2、`luci-app-cfddns` 0.1.1 修复，已在 GL-BE14000 上复验（见下）。
 
-core v0.3.1（`cfddns` 0.3.1-1）起，`1.1.1.1`（v6 为 `2606:4700:4700::1111`）不通时 IPv4 / IPv6 探测改用 `www.cloudflare.com`，尚未在真机上验收。
+core v0.3.1（`cfddns` 0.3.1-1）起，`1.1.1.1`（v6 为 `2606:4700:4700::1111`）不通时 IPv4 / IPv6 探测改用 `www.cloudflare.com`，已在 GL-BE14000 上验收（该设备上行两族的主地址都不通）。
+
+GL-BE14000 上已通过的项（[验收记录](docs/acceptance/2026-11-08-gl-be14000.md)，验收版本 `cfddns` 0.3.1-1、`luci-app-cfddns` 0.1.1，全新安装）：
+
+- 按本 README 导入公钥、添加软件源、`opkg update`、`usign -V` 校验输出 `OK`，先装 `cfddns`、再装 `luci-app-cfddns`；该固件的 `opkg.conf` 没有 `check_signature`，busybox 的 `printf` 是 shell 内建命令
+- UCI / env 权限 `0600`，进程参数、日志、状态文件和 inspect 输出里没有 Token；`-once`、`-inspect`（记录存在 / 不存在 / 同名多条 / Token 无效 / 未配置），以及服务启动、停止、重启、`reload` 和 `enabled` 开关
+- 在 `1.1.1.1` 和 `2606:4700:4700::1111` 都不通的真实上行上，IPv4 和 IPv6 都经 `www.cloudflare.com` 探测成功，之后各轮直接复用；Cloudflare A / AAAA 记录的创建、内容不同时更新、无变化周期不写入
+- LuCI 页面用到的 rpcd 调用（经 uhttpd `/ubus`、只授予本应用和 `luci-base` 的会话）：保存并应用（启用 / 停用 / 无效值）、启动 / 停止 / 重启、状态读取和 inspect，以及 ACL 对无关文件、无关命令和其他配置的拒绝；清空 Token 或两个域名后保存并应用会删除 `/etc/cfddns.env` 并停止服务，「运行状态」显示尚未配置
+
+未验证：重启、版本升级、浏览器里的页面显示、`v6_iface`、一族探测失败。该线路上 GitHub 的 IPv6 不稳定，两次 `opkg install` 第一次都下载失败，原样重跑即成功（见验收记录）。
 
 ---
 
